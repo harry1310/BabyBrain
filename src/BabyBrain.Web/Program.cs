@@ -9,6 +9,7 @@ using BabyBrain.Scrapers.Va;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Middleware;
 using BabyBrain.Web.Services;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -28,6 +29,15 @@ if (string.IsNullOrWhiteSpace(dbPath))
 }
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 builder.Services.AddDbContext<BabyBrainDbContext>(o => o.UseSqlite($"Data Source={dbPath}"));
+
+// Persist Data Protection keys to the mounted volume so antiforgery tokens,
+// cookies, etc. survive container rebuilds. Without this each rebuild
+// generates fresh keys, breaking every existing browser session.
+var dpKeyDir = Path.Combine(Path.GetDirectoryName(dbPath)!, "dataprotection-keys");
+Directory.CreateDirectory(dpKeyDir);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dpKeyDir))
+    .SetApplicationName("BabyBrain");
 
 builder.Services.AddHttpClient();
 // Typed HttpClient for TfL — 8s timeout so a slow upstream doesn't hold the request open.
