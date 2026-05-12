@@ -34,15 +34,15 @@
         @foreach (var o in result.Outcomes)
         {
             <tr>
-                <td><code>@o.Source</code></td>
+                <td><span class="font-monospace small">@o.Source</span></td>
                 <td class="text-center">
                     @if (o.Success)
                     {
-                        <span class="badge bg-success">OK</span>
+                        <span class="text-success fs-5" title="Success">✓</span>
                     }
                     else
                     {
-                        <span class="badge bg-danger">FAIL</span>
+                        <span class="text-danger fs-5" title="Failed">✗</span>
                     }
                 </td>
                 <td class="text-end">@o.Rows</td>
@@ -60,12 +60,19 @@
 }
 
 <h2 class="mt-5">Recent runs</h2>
-<p class="text-muted small">Last @(Model.History.FirstOrDefault()?.Recent.Count ?? 0) runs per source, most recent first. A successful row count shown in <span class="text-danger fw-semibold">red</span> means it dropped to half or less of the previous successful run.</p>
+<p class="text-muted small">
+    Status icon shows the latest run per source:
+    <span class="text-success fw-semibold">✓</span> success ·
+    <span class="text-danger fw-semibold">✗</span> failed ·
+    <span class="text-warning fw-semibold">⚠</span> succeeded but row count dropped to half or less of the previous successful run.
+    Cells show the last 5 runs, most recent first.
+</p>
 
 <table class="table table-sm align-middle">
     <thead>
         <tr>
             <th>Source</th>
+            <th class="text-center">Status</th>
             <th colspan="5" class="text-center">Recent runs (most recent first)</th>
             <th></th>
         </tr>
@@ -73,8 +80,27 @@
     <tbody>
     @foreach (var h in Model.History)
     {
+        var latest = h.Recent.FirstOrDefault();
         <tr>
-            <td><code>@h.Source</code></td>
+            <td><span class="font-monospace small">@h.Source</span></td>
+            <td class="text-center">
+                @if (latest is null)
+                {
+                    <span class="text-muted" title="No runs yet">—</span>
+                }
+                else if (latest.Status == ScrapeRun.StatusFailed)
+                {
+                    <span class="text-danger fs-4" title="Last run failed">✗</span>
+                }
+                else if (AdminModel.IsDrop(h.Recent, 0))
+                {
+                    <span class="text-warning fs-4" title="Last run succeeded, but row count is ≤50% of the prior successful run">⚠</span>
+                }
+                else
+                {
+                    <span class="text-success fs-4" title="Last run succeeded">✓</span>
+                }
+            </td>
             @for (var i = 0; i < 5; i++)
             {
                 if (i < h.Recent.Count)
