@@ -3,7 +3,9 @@ using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.Shared;
+using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
+using BabyBrain.Scrapers.Va;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Middleware;
 using BabyBrain.Web.Services;
@@ -29,12 +31,31 @@ builder.Services.AddDbContext<BabyBrainDbContext>(o => o.UseSqlite($"Data Source
 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<GeocodingService>();
+builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 builder.Services.AddScoped<ScrapeRunner>();
+
+// HTML archive: enabled only when BABYBRAIN_HTML_ARCHIVE_PATH is set. Saved
+// pages are useful for debugging failed scrapes and for any future programmatic
+// remediation flow. Production default in docker-compose is /data/scrape-html.
+var htmlArchivePath = builder.Configuration["BABYBRAIN_HTML_ARCHIVE_PATH"];
+if (!string.IsNullOrWhiteSpace(htmlArchivePath))
+{
+    var capturedPath = htmlArchivePath;
+    builder.Services.AddSingleton<IHtmlArchive>(sp =>
+        new FileHtmlArchive(capturedPath, sp.GetRequiredService<ILogger<FileHtmlArchive>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IHtmlArchive>(NullHtmlArchive.Instance);
+}
+
 builder.Services.AddSingleton<PlaywrightFetcher>();
 builder.Services.AddScoped<IScraper, CamdenStayAndPlayScraper>();
 builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
-builder.Services.AddScoped<IScraper, IslingtonLibraryScraper>();
+builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
 builder.Services.AddScoped<IScraper, BritishMuseumScraper>();
+builder.Services.AddScoped<IScraper, SouthbankCentreScraper>();
+builder.Services.AddScoped<IScraper, VaEarlyYearsScraper>();
 builder.Services.AddHostedService<DailyScrapeService>();
 
 var app = builder.Build();
@@ -46,7 +67,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<BabyBrainDbContext>();
     db.Database.Migrate();
     var geocoder = scope.ServiceProvider.GetRequiredService<GeocodingService>();
-    try { await geocoder.ResolveMissingAsync(db); }
+    try { await geocoder.ResolveMissingAsync(); }
     catch (Exception ex) { app.Logger.LogError(ex, "Startup geocode pass failed"); }
 }
 

@@ -16,7 +16,7 @@ obj/
 
 # Local data
 **/App_Data/
-data/
+/data/
 
 # Secrets
 .env

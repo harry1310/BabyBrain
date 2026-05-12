@@ -30,7 +30,7 @@ public static partial class TextParsing
         var t = text.ToLowerInvariant();
         var m = Regex.Match(t, @"(\d+)\s*to\s*(\d+)\s*months?");
         if (m.Success) return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value));
-        m = Regex.Match(t, @"ages?\s*(\d+)\s*to\s*(\d+)");
+        m = Regex.Match(t, @"ages?\s*(\d+)\s*(?:[–\-]|to)\s*(\d+)\b");
         if (m.Success) return (int.Parse(m.Groups[1].Value) * 12, int.Parse(m.Groups[2].Value) * 12);
         // "8–15-year-olds", "8-15 year olds", "8 to 15 year-olds"
         m = Regex.Match(t, @"(\d+)\s*(?:[–\-]|to)\s*(\d+)[\s\-]?year[\s\-]?olds?");

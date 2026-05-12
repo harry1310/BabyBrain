@@ -1,28 +1,115 @@
 @page
+@using BabyBrain.Web.Data
+@using BabyBrain.Web.Services
 @model AdminModel
 @{
     ViewData["Title"] = "Admin";
 }
 
 <h1>Admin</h1>
-<p class="text-muted">Trigger a scraper run. This fetches fresh data and upserts into the local database.</p>
+<p class="text-muted">Trigger a scraper run. Each source is run independently — one failing source no longer aborts the others.</p>
 
 <form method="post">
     <button type="submit" class="btn btn-primary">Run all scrapers now</button>
 </form>
 
-@if (Model.LastRunSummary is { } summary)
+@if (Model.LastResult is { } result)
 {
-    <div class="alert alert-success mt-4">
-        <strong>Done.</strong> @summary
+    var alertClass = result.AllSucceeded ? "alert-success" : "alert-warning";
+    <div class="alert @alertClass mt-4">
+        <strong>@(result.AllSucceeded ? "All scrapers succeeded." : "Some scrapers failed.")</strong>
+        @result.TotalRows rows in total · @result.NewGeocodes new postcodes geocoded.
     </div>
+
+    <table class="table table-sm mt-3">
+        <thead>
+            <tr>
+                <th>Source</th>
+                <th class="text-center">Status</th>
+                <th class="text-end">Rows</th>
+                <th>Detail</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var o in result.Outcomes)
+        {
+            <tr>
+                <td><code>@o.Source</code></td>
+                <td class="text-center">
+                    @if (o.Success)
+                    {
+                        <span class="badge bg-success">OK</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger">FAIL</span>
+                    }
+                </td>
+                <td class="text-end">@o.Rows</td>
+                <td class="small text-muted">@(o.Error ?? "")</td>
+            </tr>
+        }
+        </tbody>
+    </table>
 }
 @if (Model.LastRunError is { } err)
 {
     <div class="alert alert-danger mt-4">
-        <strong>Failed:</strong> @err
+        <strong>Run failed at the system level:</strong> @err
     </div>
 }
+
+<h2 class="mt-5">Recent runs</h2>
+<p class="text-muted small">Last @(Model.History.FirstOrDefault()?.Recent.Count ?? 0) runs per source, most recent first. A successful row count shown in <span class="text-danger fw-semibold">red</span> means it dropped to half or less of the previous successful run.</p>
+
+<table class="table table-sm align-middle">
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th colspan="5" class="text-center">Recent runs (most recent first)</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var h in Model.History)
+    {
+        <tr>
+            <td><code>@h.Source</code></td>
+            @for (var i = 0; i < 5; i++)
+            {
+                if (i < h.Recent.Count)
+                {
+                    var run = h.Recent[i];
+                    var isFail = run.Status == ScrapeRun.StatusFailed;
+                    var isDrop = !isFail && AdminModel.IsDrop(h.Recent, i);
+                    var classes = isFail ? "text-danger" : isDrop ? "text-danger fw-semibold" : "";
+                    var title = $"{run.StartedAt:yyyy-MM-dd HH:mm} UTC" + (run.Error is null ? "" : $"\n{run.Error}");
+                    <td class="text-end @classes" title="@title">
+                        @if (isFail)
+                        {
+                            <text>✗</text>
+                        }
+                        else
+                        {
+                            @run.RowsScraped
+                        }
+                    </td>
+                }
+                else
+                {
+                    <td class="text-end text-muted">—</td>
+                }
+            }
+            <td class="text-end">
+                <form method="post" asp-page-handler="RunOne" class="d-inline">
+                    <input type="hidden" name="source" value="@h.Source" />
+                    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-run just this scraper">Re-run</button>
+                </form>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>
 
 <h2 class="mt-5">Database</h2>
 <dl>

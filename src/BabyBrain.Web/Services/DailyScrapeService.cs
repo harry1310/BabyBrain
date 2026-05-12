@@ -1,8 +1,11 @@
+using BabyBrain.Scrapers.Shared;
+
 namespace BabyBrain.Web.Services;
 
 public sealed class DailyScrapeService : BackgroundService
 {
     private static readonly TimeOnly RunAt = new(3, 0);
+    private const int HtmlArchiveKeepPerUrl = 5;
 
     private readonly IServiceProvider _services;
     private readonly ILogger<DailyScrapeService> _logger;
@@ -46,9 +49,23 @@ public sealed class DailyScrapeService : BackgroundService
         try
         {
             using var scope = _services.CreateScope();
+
+            // Prune yesterday's archived HTML before the new run so we don't
+            // accumulate disk forever. Failure here mustn't stop the scrape.
+            try
+            {
+                var archive = scope.ServiceProvider.GetRequiredService<IHtmlArchive>();
+                await archive.PruneAsync(HtmlArchiveKeepPerUrl, ct);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "HTML archive prune failed"); }
+
             var runner = scope.ServiceProvider.GetRequiredService<ScrapeRunner>();
             var result = await runner.RunAllAsync(ct: ct);
-            _logger.LogInformation("Scheduled scrape complete. {Summary}", result.Summary);
+            var perSource = string.Join("; ", result.Outcomes.Select(o =>
+                o.Success ? $"{o.Source}: {o.Rows}" : $"{o.Source}: FAILED"));
+            _logger.LogInformation(
+                "Scheduled scrape complete. {Summary}. Geocoded {Geo} new postcodes.",
+                perSource, result.NewGeocodes);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)

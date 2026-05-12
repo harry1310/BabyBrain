@@ -8,16 +8,19 @@ using Microsoft.Extensions.Logging;
 namespace BabyBrain.Scrapers.Islington;
 
 // Scrapes Islington's "Under 5s activities" listing from the Find Your
-// Islington directory (Open Objects KB5 platform).
+// Islington directory (Open Objects KB5 platform). Covers libraries,
+// children's centres, stay-and-play groups, and music sessions — whatever
+// the directory lists under activity=4 with a parseable session schedule.
 // Two passes:
 //   1. Fetch the listing page (activity=4 = under-5s) and extract every
-//      service.page?id=… link — this auto-discovers libraries, children's
-//      centres, stay-and-play groups, music sessions, etc.
+//      service.page?id=… link.
 //   2. For each service, fetch the detail page and parse the "Session
 //      Information" field. Lines look like "Baby Bounce Fridays 11am" — some
 //      services split across two lines ("Baby Bounce:\nFridays, 11am").
-// Sessions are weekly recurring; we materialise occurrences across the horizon.
-public sealed class IslingtonLibraryScraper : IScraper
+// Sessions are weekly recurring; we materialise occurrences across the
+// horizon. Category is inferred per row from the service name (a "Library"
+// service emits Library rows; everything else emits Community).
+public sealed class IslingtonFindYourScraper : IScraper
 {
     // `sr` is "start record" (offset, not page size). The directory paginates
     // in groups of 50; we walk pages until one returns no service links.
@@ -27,12 +30,14 @@ public sealed class IslingtonLibraryScraper : IScraper
     private const int MaxPages = 10;
 
     public string SourceId => "islington_findyour";
+    // Default category — most under-5s services in the directory are libraries
+    // by count, but each row's actual category is set per-service in ParsePage.
     public string Category => Categories.Library;
 
     private readonly PlaywrightFetcher _fetcher;
-    private readonly ILogger<IslingtonLibraryScraper> _logger;
+    private readonly ILogger<IslingtonFindYourScraper> _logger;
 
-    public IslingtonLibraryScraper(PlaywrightFetcher fetcher, ILogger<IslingtonLibraryScraper> logger)
+    public IslingtonFindYourScraper(PlaywrightFetcher fetcher, ILogger<IslingtonFindYourScraper> logger)
     {
         _fetcher = fetcher;
         _logger = logger;
@@ -101,7 +106,8 @@ public sealed class IslingtonLibraryScraper : IScraper
 
     private IEnumerable<EventOccurrence> ParsePage(IDocument doc, string url, DateOnly from, DateOnly to, DateTimeOffset now)
     {
-        var serviceName = doc.QuerySelector("h1")?.TextContent.Trim() ?? "Library";
+        var serviceName = doc.QuerySelector("h1")?.TextContent.Trim() ?? "Under 5s service";
+        var category = InferCategory(serviceName);
         var (venue, address, postcode) = ExtractLocation(doc);
         foreach (var line in ExtractSessionLines(doc))
         {
@@ -113,7 +119,7 @@ public sealed class IslingtonLibraryScraper : IScraper
                 {
                     ExternalKey = $"{SourceId}:{Slug(venue)}:{Slug(parsed.Name)}:{date:yyyy-MM-dd}:{parsed.StartTime:HHmm}",
                     Source = SourceId,
-                    Category = Categories.Library,
+                    Category = category,
                     SourceUrl = url,
                     Date = date,
                     StartTime = parsed.StartTime,
@@ -225,4 +231,14 @@ public sealed class IslingtonLibraryScraper : IScraper
     }
 
     private static string Slug(string s) => Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+
+    // Categorise a row by the service's own name. The "Find Your Islington"
+    // directory's under-5s listing is a mix of libraries, children's centres,
+    // and other community spaces — they shouldn't all share one category.
+    private static string InferCategory(string serviceName)
+    {
+        var n = serviceName.ToLowerInvariant();
+        if (n.Contains("library")) return Categories.Library;
+        return Categories.Community;
+    }
 }

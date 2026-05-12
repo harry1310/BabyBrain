@@ -2,17 +2,17 @@
 
 # Build stage — .NET 10 SDK
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /src
+WORKDIR /build
 
 # Copy project files first so `dotnet restore` is cacheable across source edits
-COPY src/BabyBrain.Scrapers/BabyBrain.Scrapers.csproj src/BabyBrain.Scrapers/
-COPY src/BabyBrain.Web/BabyBrain.Web.csproj src/BabyBrain.Web/
-RUN dotnet restore src/BabyBrain.Web/BabyBrain.Web.csproj
+COPY src/BabyBrain.Scrapers/BabyBrain.Scrapers.csproj BabyBrain.Scrapers/
+COPY src/BabyBrain.Web/BabyBrain.Web.csproj BabyBrain.Web/
+RUN dotnet restore BabyBrain.Web/BabyBrain.Web.csproj
 
 # Copy the rest of the source
-COPY src/ src/
+COPY src/ ./
 
-RUN dotnet publish src/BabyBrain.Web/BabyBrain.Web.csproj \
+RUN dotnet publish BabyBrain.Web/BabyBrain.Web.csproj \
     -c Release \
     -o /app/publish \
     --no-restore \

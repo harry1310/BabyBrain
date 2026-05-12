@@ -6,9 +6,10 @@ public interface IScraper
 {
     string SourceId { get; }
 
-    // Category every row from this scraper gets stamped with. See Categories
-    // for the allowed values. A single scraper covers a single category in v1
-    // — split into two scrapers if a source spans categories.
+    // Default/primary category for this source. See Categories for allowed
+    // values. Individual rows may override this — e.g. a council directory
+    // listing both libraries and children's centres can stamp rows with the
+    // best-fitting category per service.
     string Category { get; }
 
     // Materialise event occurrences covering [today, today + horizonDays).

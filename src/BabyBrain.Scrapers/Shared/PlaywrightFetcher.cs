@@ -12,6 +12,11 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
 
     private IPlaywright? _playwright;
     private IBrowser? _browser;
+    private readonly IHtmlArchive _archive;
+
+    public PlaywrightFetcher() : this(NullHtmlArchive.Instance) { }
+
+    public PlaywrightFetcher(IHtmlArchive archive) => _archive = archive;
 
     public async Task<string> FetchRenderedHtmlAsync(
         string url,
@@ -29,9 +34,14 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
         try
         {
             var page = await context.NewPageAsync();
-            await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.NetworkIdle, Timeout = 60_000 });
+            // `Load` rather than NetworkIdle — sites with constant analytics chatter
+            // (Southbank Centre, etc.) never reach NetworkIdle. The WaitForSelector
+            // below is the real readiness check for the content we care about.
+            await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.Load, Timeout = 60_000 });
             await page.WaitForSelectorAsync(waitForSelector, new() { Timeout = 30_000, State = waitState });
-            return await page.ContentAsync();
+            var html = await page.ContentAsync();
+            await _archive.SaveAsync(url, html, ct);
+            return html;
         }
         finally
         {
