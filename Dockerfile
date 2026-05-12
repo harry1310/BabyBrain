@@ -22,6 +22,19 @@ RUN dotnet publish BabyBrain.Web/BabyBrain.Web.csproj \
 FROM mcr.microsoft.com/playwright/dotnet:v1.59.0-noble AS runtime
 WORKDIR /app
 
+# The Playwright .NET image ships with an older .NET runtime than the one we
+# build against (net10.0). Install the ASP.NET 10 runtime alongside so
+# `dotnet BabyBrain.Web.dll` finds Microsoft.NETCore.App 10.0.x at startup.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget ca-certificates \
+    && wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O /tmp/ms-prod.deb \
+    && dpkg -i /tmp/ms-prod.deb \
+    && rm /tmp/ms-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends aspnetcore-runtime-10.0 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080 \
     ASPNETCORE_ENVIRONMENT=Production \
     DOTNET_RUNNING_IN_CONTAINER=true \
