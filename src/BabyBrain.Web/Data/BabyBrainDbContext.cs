@@ -13,16 +13,20 @@ public class BabyBrainDbContext : DbContext
     public DbSet<Geocode> Geocodes => Set<Geocode>();
     public DbSet<ScrapeRun> ScrapeRuns => Set<ScrapeRun>();
 
-    // ISO-8601 with offset, single space separator — byte-identical to what EF
-    // Core was already writing for DateTimeOffset on SQLite by default. Adding
-    // an explicit converter lets the LINQ translator see a string-typed column
-    // (so ORDER BY / WHERE BETWEEN translate), while existing rows stay valid.
-    // Lexical ordering of this format matches chronological ordering.
+    // ISO-8601 with offset, single space separator. Adding an explicit
+    // converter lets the LINQ translator see a string-typed column (so
+    // ORDER BY / WHERE BETWEEN translate). Lexical ordering of this format
+    // matches chronological ordering.
+    //
+    // Write side: always 7 fractional digits (zero-padded) for consistency.
+    // Read side: lenient DateTimeOffset.Parse — handles 6-digit values that
+    // existed in the DB before this converter was added (when EF's default
+    // formatter sometimes trimmed trailing zeros).
     private const string DateTimeOffsetFormat = "yyyy-MM-dd HH:mm:ss.fffffffzzz";
 
     private static readonly ValueConverter<DateTimeOffset, string> DateTimeOffsetConverter =
         new(dto => dto.ToString(DateTimeOffsetFormat, CultureInfo.InvariantCulture),
-            s => DateTimeOffset.ParseExact(s, DateTimeOffsetFormat, CultureInfo.InvariantCulture));
+            s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
 
     protected override void OnModelCreating(ModelBuilder mb)
     {

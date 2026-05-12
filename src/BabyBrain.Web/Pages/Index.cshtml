@@ -102,18 +102,20 @@ else
                 border-radius: 0.375rem;
             }
             .event-card:hover { transform: translateY(-1px); transition: transform .1s ease-out; }
-            .bb-go-btn {
+            .bb-pill {
                 display: inline-block;
                 margin-top: .35rem;
+                margin-right: .25rem;
                 padding: .15rem .55rem;
-                background: #0d6efd;
-                color: #fff !important;
                 border-radius: 999px;
                 font-weight: 600;
                 text-decoration: none !important;
                 font-size: .85em;
             }
-            .bb-go-btn:hover { background: #0b5ed7; }
+            .bb-pill-primary   { background: #0d6efd; color: #fff !important; }
+            .bb-pill-primary:hover { background: #0b5ed7; color: #fff !important; }
+            .bb-pill-secondary { background: #fff; color: #0d6efd !important; border: 1px solid #0d6efd; }
+            .bb-pill-secondary:hover { background: rgba(13, 110, 253, .08); }
         </style>
         <div id="map" style="height: 380px; border-radius: 0.5rem;" class="mb-4"></div>
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -146,12 +148,12 @@ else
                 }
 
                 points.forEach(function (p) {
-                    // TfL Journey Planner. The destination pre-fills via ?to=,
-                    // but TfL's URL API doesn't expose the step-free toggle —
-                    // user has to tick "Full step-free access" themselves once
-                    // the planner opens. Hence the honest button label.
-                    var goUrl = 'https://tfl.gov.uk/plan-a-journey/?to=' +
-                                encodeURIComponent(p.postcode);
+                    // Walk: Google Maps walking directions, opens in new tab.
+                    // Step-free: handled by our /api/step-free-journey endpoint
+                    // which calls TfL's Unified API and renders results in a modal.
+                    var walkUrl = 'https://www.google.com/maps/dir/?api=1' +
+                                  '&destination=' + encodeURIComponent(p.postcode) +
+                                  '&travelmode=walking';
 
                     var html = '<strong>' + esc(p.name) + '</strong><br>' +
                                esc(p.venue) + '<br>' +
@@ -159,7 +161,8 @@ else
                                '<br><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:' +
                                  esc(p.color) + ';margin-right:.25rem"></span>' +
                                esc(p.category) +
-                               '<br><a class="bb-go-btn" href="' + esc(goUrl) + '" target="_blank" rel="noopener" title="Opens TfL Journey Planner. Tick &quot;Full step-free access&quot; in the options for accessible routing.">Plan on TfL →</a>';
+                               '<br><a class="bb-pill bb-pill-primary bb-step-free-btn" href="#" data-postcode="' + esc(p.postcode) + '">Step-free →</a>' +
+                               '<a class="bb-pill bb-pill-secondary" href="' + esc(walkUrl) + '" target="_blank" rel="noopener">Walk →</a>';
                     if (p.url) {
                         html += '<br><a href="' + esc(p.url) + '" target="_blank" rel="noopener" style="font-size:.85em">Source</a>';
                     }
@@ -198,9 +201,150 @@ else
                     var key = card.getAttribute('data-event-key');
                     var marker = markersByKey[key];
                     if (!marker) return;
-                    map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: 0.6 });
+                    // Just open the popup — keep the user's current map view.
+                    // Leaflet's popup auto-pan will nudge the map only if the
+                    // popup would otherwise be off-screen; zoom stays put.
                     marker.openPopup();
                 });
+
+                // Step-free button inside the marker popup: get user location,
+                // call our /api/step-free-journey endpoint, render result in
+                // the Bootstrap modal at the bottom of the page.
+                document.body.addEventListener('click', function (ev) {
+                    var btn = ev.target.closest('.bb-step-free-btn');
+                    if (!btn) return;
+                    ev.preventDefault();
+                    var postcode = btn.getAttribute('data-postcode');
+                    if (!postcode) return;
+                    map.closePopup();
+                    openJourneyModal('Getting your location…');
+                    requestLocation()
+                        .then(function (loc) {
+                            setJourneyModal('Finding a step-free route to ' + esc(postcode) + '…');
+                            var url = '/api/step-free-journey?fromLat=' + encodeURIComponent(loc.lat) +
+                                      '&fromLng=' + encodeURIComponent(loc.lng) +
+                                      '&toPostcode=' + encodeURIComponent(postcode);
+                            return fetch(url);
+                        })
+                        .then(function (r) {
+                            if (!r.ok) throw new Error('Request failed (HTTP ' + r.status + ').');
+                            return r.json();
+                        })
+                        .then(function (data) { setJourneyModal(renderJourney(data, postcode)); })
+                        .catch(function (err) { setJourneyModal(renderJourneyError(err.message, postcode)); });
+                });
+
+                function requestLocation() {
+                    return new Promise(function (resolve, reject) {
+                        // Cache the user's location for 30 min so repeat clicks
+                        // don't re-prompt or re-fix their GPS.
+                        var cachedRaw = sessionStorage.getItem('bb-user-location');
+                        if (cachedRaw) {
+                            try {
+                                var c = JSON.parse(cachedRaw);
+                                if (Date.now() - c.t < 30 * 60 * 1000) {
+                                    resolve({ lat: c.lat, lng: c.lng });
+                                    return;
+                                }
+                            } catch (e) { /* fall through */ }
+                        }
+                        if (!navigator.geolocation) {
+                            reject(new Error('Your browser does not support location access.'));
+                            return;
+                        }
+                        navigator.geolocation.getCurrentPosition(
+                            function (pos) {
+                                var loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                                sessionStorage.setItem('bb-user-location',
+                                    JSON.stringify({ lat: loc.lat, lng: loc.lng, t: Date.now() }));
+                                resolve(loc);
+                            },
+                            function (err) {
+                                var msg = 'Could not get your location.';
+                                if (err && err.code === 1) msg = 'Location permission denied. Enable it in your browser to use step-free routing.';
+                                else if (err && err.code === 2) msg = 'Your location could not be determined right now.';
+                                else if (err && err.code === 3) msg = 'Location request timed out.';
+                                reject(new Error(msg));
+                            },
+                            { timeout: 10000, maximumAge: 5 * 60 * 1000 }
+                        );
+                    });
+                }
+
+                function openJourneyModal(initialHtml) {
+                    setJourneyModal(initialHtml);
+                    var el = document.getElementById('bb-journey-modal');
+                    if (!el || !window.bootstrap || !bootstrap.Modal) {
+                        // Bootstrap JS missing — fall back to alert.
+                        alert(el ? el.querySelector('.modal-body').textContent : initialHtml);
+                        return;
+                    }
+                    bootstrap.Modal.getOrCreateInstance(el).show();
+                }
+                function setJourneyModal(innerHtml) {
+                    var body = document.getElementById('bb-journey-modal-body');
+                    if (body) body.innerHTML = innerHtml;
+                }
+
+                function renderJourney(data, postcode) {
+                    var manualLink = 'https://tfl.gov.uk/plan-a-journey/?to=' + encodeURIComponent(postcode);
+                    if (!data || data.success === false) {
+                        return '<div class="alert alert-warning mb-0">' + esc((data && data.error) || 'No step-free route found.') +
+                               '<br><a href="' + esc(manualLink) + '" target="_blank" rel="noopener">Open TfL Journey Planner manually →</a></div>';
+                    }
+                    var journeys = data.journeys || [];
+                    if (journeys.length === 0) {
+                        return '<div class="alert alert-warning mb-0">No step-free route found.<br>' +
+                               '<a href="' + esc(manualLink) + '" target="_blank" rel="noopener">Open TfL Journey Planner manually →</a></div>';
+                    }
+                    var html = '<p class="text-muted small mb-3">Step-free route from your location to <strong>' +
+                               esc(postcode) + '</strong>.</p>';
+                    journeys.forEach(function (j, i) {
+                        html += '<div class="card mb-3"><div class="card-body">';
+                        html += '<div class="d-flex justify-content-between align-items-baseline mb-2">';
+                        html += '<strong>Option ' + (i + 1) + '</strong>';
+                        html += '<span class="text-muted small">' + j.durationMinutes + ' min' +
+                                (j.fare ? ' · ' + esc(j.fare) : '') + '</span>';
+                        html += '</div>';
+                        html += '<ul class="list-unstyled mb-0 small">';
+                        (j.legs || []).forEach(function (leg) {
+                            html += '<li class="mb-1">' + legIcon(leg.mode) + ' ' +
+                                    '<strong>' + leg.durationMinutes + ' min</strong> · ';
+                            if (leg.lineName) html += esc(leg.lineName) + ' · ';
+                            if (leg.mode === 'walking') {
+                                html += 'walk' + (leg.toName ? ' to ' + esc(leg.toName) : '');
+                            } else {
+                                if (leg.fromName) html += esc(leg.fromName);
+                                if (leg.toName) html += ' → ' + esc(leg.toName);
+                            }
+                            html += '</li>';
+                        });
+                        html += '</ul>';
+                        html += '</div></div>';
+                    });
+                    html += '<div class="text-end"><a href="' + esc(manualLink) +
+                            '" target="_blank" rel="noopener" class="small">Open on TfL →</a></div>';
+                    return html;
+                }
+
+                function renderJourneyError(message, postcode) {
+                    var manualLink = 'https://tfl.gov.uk/plan-a-journey/?to=' + encodeURIComponent(postcode);
+                    return '<div class="alert alert-warning mb-0">' + esc(message) +
+                           '<br><a href="' + esc(manualLink) + '" target="_blank" rel="noopener">Open TfL Journey Planner manually →</a></div>';
+                }
+
+                function legIcon(mode) {
+                    switch (mode) {
+                        case 'walking': return '🚶';
+                        case 'tube':    return '🚇';
+                        case 'bus':     return '🚌';
+                        case 'national-rail':
+                        case 'overground':
+                        case 'elizabeth-line': return '🚆';
+                        case 'dlr':     return '🚊';
+                        default:        return '•';
+                    }
+                }
 
                 // CSS.escape polyfill — keys contain colons which CSS would interpret.
                 function cssEscape(s) {
@@ -245,3 +389,18 @@ else
         </div>
     }
 }
+
+<!-- Modal for step-free journey results (populated by JS when the Step-free pill is clicked) -->
+<div class="modal fade" id="bb-journey-modal" tabindex="-1" aria-labelledby="bb-journey-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bb-journey-modal-title">Step-free journey</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="bb-journey-modal-body">
+                <p class="text-muted mb-0">Loading…</p>
+            </div>
+        </div>
+    </div>
+</div>

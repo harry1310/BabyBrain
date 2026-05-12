@@ -30,6 +30,12 @@ Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 builder.Services.AddDbContext<BabyBrainDbContext>(o => o.UseSqlite($"Data Source={dbPath}"));
 
 builder.Services.AddHttpClient();
+// Typed HttpClient for TfL — 8s timeout so a slow upstream doesn't hold the request open.
+builder.Services.AddHttpClient<TflJourneyService>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(8);
+    c.DefaultRequestHeaders.Add("User-Agent", "BabyBrain/1.0 (+https://github.com/harry1310/BabyBrain)");
+});
 builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 builder.Services.AddScoped<ScrapeRunner>();
@@ -91,5 +97,15 @@ app.UseWhen(
 app.UseAuthorization();
 app.MapStaticAssets();
 app.MapRazorPages().WithStaticAssets();
+
+// Step-free journey lookup via TfL Unified API. Called from the map popup
+// in Index.cshtml when the user clicks "Step-free →".
+app.MapGet("/api/step-free-journey", async (
+    double fromLat, double fromLng, string toPostcode,
+    TflJourneyService svc, CancellationToken ct) =>
+{
+    var result = await svc.GetStepFreeJourneyAsync(fromLat, fromLng, toPostcode, ct);
+    return Results.Json(result);
+});
 
 app.Run();
