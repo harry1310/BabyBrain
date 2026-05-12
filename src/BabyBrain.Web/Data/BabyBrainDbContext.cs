@@ -19,14 +19,20 @@ public class BabyBrainDbContext : DbContext
     // matches chronological ordering.
     //
     // Write side: always 7 fractional digits (zero-padded) for consistency.
-    // Read side: lenient DateTimeOffset.Parse — handles 6-digit values that
-    // existed in the DB before this converter was added (when EF's default
-    // formatter sometimes trimmed trailing zeros).
-    private const string DateTimeOffsetFormat = "yyyy-MM-dd HH:mm:ss.fffffffzzz";
+    // Read side: ParseExact with multiple accepted formats — old rows
+    // written before this converter sometimes have 6 fractional digits,
+    // or none at all (when the time landed on an exact second).
+    private const string DateTimeOffsetWriteFormat = "yyyy-MM-dd HH:mm:ss.fffffffzzz";
+
+    private static readonly string[] DateTimeOffsetReadFormats =
+    {
+        "yyyy-MM-dd HH:mm:ss.FFFFFFFzzz",   // 0–7 fractional digits, space separator (covers all space-sep variants)
+        "yyyy-MM-ddTHH:mm:ss.FFFFFFFzzz",   // T separator (in case any row uses ISO-8601 strict)
+    };
 
     private static readonly ValueConverter<DateTimeOffset, string> DateTimeOffsetConverter =
-        new(dto => dto.ToString(DateTimeOffsetFormat, CultureInfo.InvariantCulture),
-            s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
+        new(dto => dto.ToString(DateTimeOffsetWriteFormat, CultureInfo.InvariantCulture),
+            s => DateTimeOffset.ParseExact(s, DateTimeOffsetReadFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
