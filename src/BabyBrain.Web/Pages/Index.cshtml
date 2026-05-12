@@ -207,9 +207,10 @@ else
                     marker.openPopup();
                 });
 
-                // Step-free button inside the marker popup: get user location,
-                // call our /api/step-free-journey endpoint, render result in
-                // the Bootstrap modal at the bottom of the page.
+                // Step-free button inside the marker popup: try browser
+                // geolocation; if it's unavailable or denied (common on HTTP
+                // origins — most browsers refuse it outside HTTPS/localhost),
+                // fall back to a postcode input the user can fill in manually.
                 document.body.addEventListener('click', function (ev) {
                     var btn = ev.target.closest('.bb-step-free-btn');
                     if (!btn) return;
@@ -219,20 +220,45 @@ else
                     map.closePopup();
                     openJourneyModal('Getting your location…');
                     requestLocation()
-                        .then(function (loc) {
-                            setJourneyModal('Finding a step-free route to ' + esc(postcode) + '…');
-                            var url = '/api/step-free-journey?fromLat=' + encodeURIComponent(loc.lat) +
-                                      '&fromLng=' + encodeURIComponent(loc.lng) +
-                                      '&toPostcode=' + encodeURIComponent(postcode);
-                            return fetch(url);
-                        })
+                        .then(function (loc) { return fetchAndRender(loc.lat + ',' + loc.lng, postcode); })
+                        .catch(function (err) { showOriginFallback(postcode, err.message); });
+                });
+
+                function fetchAndRender(from, toPostcode) {
+                    setJourneyModal('Finding a step-free route to <strong>' + esc(toPostcode) + '</strong>…');
+                    var url = '/api/step-free-journey?from=' + encodeURIComponent(from) +
+                              '&to=' + encodeURIComponent(toPostcode);
+                    return fetch(url)
                         .then(function (r) {
                             if (!r.ok) throw new Error('Request failed (HTTP ' + r.status + ').');
                             return r.json();
                         })
-                        .then(function (data) { setJourneyModal(renderJourney(data, postcode)); })
-                        .catch(function (err) { setJourneyModal(renderJourneyError(err.message, postcode)); });
-                });
+                        .then(function (data) { setJourneyModal(renderJourney(data, toPostcode)); })
+                        .catch(function (err) { setJourneyModal(renderJourneyError(err.message, toPostcode)); });
+                }
+
+                function showOriginFallback(toPostcode, reason) {
+                    setJourneyModal(
+                        '<p class="text-muted small mb-3">' + esc(reason) + '</p>' +
+                        '<label class="form-label" for="bb-origin-input">Enter your starting postcode</label>' +
+                        '<div class="input-group">' +
+                          '<input type="text" id="bb-origin-input" class="form-control" placeholder="e.g. SE1 9PD" autocomplete="postal-code">' +
+                          '<button class="btn btn-primary" id="bb-origin-submit" type="button">Plan</button>' +
+                        '</div>' +
+                        '<p class="form-text mt-2">Step-free routes need to know where you’re starting from. ' +
+                        'Browser location isn’t available here — type a postcode and we’ll plan the route via TfL.</p>'
+                    );
+                    var inp = document.getElementById('bb-origin-input');
+                    var sub = document.getElementById('bb-origin-submit');
+                    function go() {
+                        var v = (inp.value || '').trim();
+                        if (!v) { inp.focus(); return; }
+                        fetchAndRender(v, toPostcode);
+                    }
+                    sub.addEventListener('click', go);
+                    inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); go(); } });
+                    inp.focus();
+                }
 
                 function requestLocation() {
                     return new Promise(function (resolve, reject) {

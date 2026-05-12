@@ -109,12 +109,14 @@ app.MapStaticAssets();
 app.MapRazorPages().WithStaticAssets();
 
 // Step-free journey lookup via TfL Unified API. Called from the map popup
-// in Index.cshtml when the user clicks "Step-free →".
+// in Index.cshtml when the user clicks "Step-free →". `from` accepts either
+// a "lat,lng" pair (browser geolocation) or a postcode (manual fallback when
+// geolocation isn't available — e.g. HTTP origins where browsers deny it).
 app.MapGet("/api/step-free-journey", async (
-    double fromLat, double fromLng, string toPostcode,
+    string from, string to,
     TflJourneyService svc, CancellationToken ct) =>
 {
-    var result = await svc.GetStepFreeJourneyAsync(fromLat, fromLng, toPostcode, ct);
+    var result = await svc.GetStepFreeJourneyAsync(from, to, ct);
     return Results.Json(result);
 });
 

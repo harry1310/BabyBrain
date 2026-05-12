@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 
 namespace BabyBrain.Web.Services;
@@ -23,23 +22,17 @@ public sealed class TflJourneyService
         _logger = logger;
     }
 
+    // TfL's Journey endpoint accepts either a "lat,lng" pair or a postcode for
+    // both `from` and `to`, so we take strings here and let callers pass either.
     public async Task<JourneyResponse> GetStepFreeJourneyAsync(
-        double fromLat, double fromLng, string toPostcode, CancellationToken ct = default)
+        string from, string to, CancellationToken ct = default)
     {
-        // Sanity-check origin coordinates so we don't pass NaN through to TfL.
-        if (double.IsNaN(fromLat) || double.IsNaN(fromLng) ||
-            fromLat is < -90 or > 90 || fromLng is < -180 or > 180)
-        {
-            return JourneyResponse.Failed("Invalid origin coordinates.");
-        }
-        if (string.IsNullOrWhiteSpace(toPostcode))
-        {
-            return JourneyResponse.Failed("Destination postcode required.");
-        }
+        if (string.IsNullOrWhiteSpace(from)) return JourneyResponse.Failed("Origin required.");
+        if (string.IsNullOrWhiteSpace(to))   return JourneyResponse.Failed("Destination required.");
 
-        var from = $"{fromLat.ToString("F6", CultureInfo.InvariantCulture)},{fromLng.ToString("F6", CultureInfo.InvariantCulture)}";
-        var to = Uri.EscapeDataString(toPostcode.Trim());
-        var url = $"{BaseUrl}/Journey/JourneyResults/{from}/to/{to}?accessibilityPreference=StepFreeToVehicle";
+        var fromEsc = Uri.EscapeDataString(from.Trim());
+        var toEsc   = Uri.EscapeDataString(to.Trim());
+        var url = $"{BaseUrl}/Journey/JourneyResults/{fromEsc}/to/{toEsc}?accessibilityPreference=StepFreeToVehicle";
 
         try
         {
