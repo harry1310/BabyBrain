@@ -96,12 +96,11 @@ else
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
               integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
         <style>
-            /* Flash highlight when a card is jumped to from the map */
-            @@keyframes bb-card-flash {
-                0%   { box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.85); }
-                100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
+            /* Persistent highlight on the currently-selected card */
+            .event-card.bb-card-active {
+                box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.85);
+                border-radius: 0.375rem;
             }
-            .event-card.bb-card-flash { animation: bb-card-flash 1.6s ease-out; }
             .event-card:hover { transform: translateY(-1px); transition: transform .1s ease-out; }
             .bb-go-btn {
                 display: inline-block;
@@ -137,11 +136,20 @@ else
                 // event_key → marker, so card clicks can open the matching marker popup.
                 var markersByKey = {};
 
+                // Track the currently-highlighted card so we can move the
+                // highlight rather than stacking outlines on every click.
+                var activeCard = null;
+                function setActiveCard(card) {
+                    if (activeCard) activeCard.classList.remove('bb-card-active');
+                    activeCard = card;
+                    if (card) card.classList.add('bb-card-active');
+                }
+
                 points.forEach(function (p) {
-                    // TfL Journey Planner — the only routing tool that exposes
-                    // step-free access as a first-class option. Deep-link URL params
-                    // are undocumented and pre-fill is best-effort; user may need to
-                    // re-enter the postcode (which is also visible on the card).
+                    // TfL Journey Planner. The destination pre-fills via ?to=,
+                    // but TfL's URL API doesn't expose the step-free toggle —
+                    // user has to tick "Full step-free access" themselves once
+                    // the planner opens. Hence the honest button label.
                     var goUrl = 'https://tfl.gov.uk/plan-a-journey/?to=' +
                                 encodeURIComponent(p.postcode);
 
@@ -151,9 +159,9 @@ else
                                '<br><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:' +
                                  esc(p.color) + ';margin-right:.25rem"></span>' +
                                esc(p.category) +
-                               '<br><a class="bb-go-btn" href="' + esc(goUrl) + '" target="_blank" rel="noopener">Plan step-free →</a>';
+                               '<br><a class="bb-go-btn" href="' + esc(goUrl) + '" target="_blank" rel="noopener" title="Opens TfL Journey Planner. Tick &quot;Full step-free access&quot; in the options for accessible routing.">Plan on TfL →</a>';
                     if (p.url) {
-                        html += ' <a href="' + esc(p.url) + '" target="_blank" rel="noopener" style="font-size:.85em">Source</a>';
+                        html += '<br><a href="' + esc(p.url) + '" target="_blank" rel="noopener" style="font-size:.85em">Source</a>';
                     }
 
                     var marker = L.circleMarker([p.lat, p.lng], {
@@ -166,34 +174,32 @@ else
 
                     markersByKey[p.event_key] = marker;
 
-                    // Marker → card: scroll to the matching card and flash it.
+                    // Marker → card: highlight the matching card. No scroll —
+                    // leave the page exactly where the user had it.
                     marker.on('click', function () {
                         var card = document.querySelector('[data-event-key="' + cssEscape(p.event_key) + '"]');
-                        if (!card) return;
-                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        card.classList.remove('bb-card-flash');
-                        // Force a reflow so re-adding the class re-triggers the animation.
-                        void card.offsetWidth;
-                        card.classList.add('bb-card-flash');
+                        setActiveCard(card);
                     });
                 });
 
                 group.addTo(map);
                 map.fitBounds(group.getBounds().pad(0.15));
 
-                // Card → marker: scroll the map into view and open the popup.
-                document.querySelectorAll('.event-card').forEach(function (card) {
-                    card.addEventListener('click', function (ev) {
-                        // Don't hijack clicks on actual links inside the card (e.g. Source).
-                        if (ev.target.closest('a')) return;
-                        var key = card.getAttribute('data-event-key');
-                        var marker = markersByKey[key];
-                        if (!marker) return;
-                        var mapEl = document.getElementById('map');
-                        mapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: 0.6 });
-                        marker.openPopup();
-                    });
+                // Card → marker via event delegation on the body. Direct
+                // querySelectorAll('.event-card') ran before the cards were
+                // parsed into the DOM (script tag appears above them), so
+                // attaching listeners up-front captured nothing.
+                document.body.addEventListener('click', function (ev) {
+                    var card = ev.target.closest('.event-card');
+                    if (!card) return;
+                    // Don't hijack clicks on actual links inside the card.
+                    if (ev.target.closest('a')) return;
+                    setActiveCard(card);
+                    var key = card.getAttribute('data-event-key');
+                    var marker = markersByKey[key];
+                    if (!marker) return;
+                    map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: 0.6 });
+                    marker.openPopup();
                 });
 
                 // CSS.escape polyfill — keys contain colons which CSS would interpret.
