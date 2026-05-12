@@ -89,7 +89,7 @@ namespace BabyBrain.Web.Data.Migrations
 
                     b.HasIndex("Date", "StartTime");
 
-                    b.ToTable("EventOccurrences");
+                    b.ToTable("EventOccurrences", (string)null);
                 });
 
             modelBuilder.Entity("BabyBrain.Web.Data.Geocode", b =>
@@ -108,7 +108,7 @@ namespace BabyBrain.Web.Data.Migrations
 
                     b.HasKey("Postcode");
 
-                    b.ToTable("Geocodes");
+                    b.ToTable("Geocodes", (string)null);
                 });
 
             modelBuilder.Entity("BabyBrain.Web.Data.ScrapeRun", b =>
@@ -141,7 +141,7 @@ namespace BabyBrain.Web.Data.Migrations
 
                     b.HasIndex("Source", "StartedAt");
 
-                    b.ToTable("ScrapeRuns");
+                    b.ToTable("ScrapeRuns", (string)null);
                 });
 #pragma warning restore 612, 618
         }

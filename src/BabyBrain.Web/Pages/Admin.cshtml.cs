@@ -97,12 +97,9 @@ public class AdminModel : PageModel
         var list = new List<SourceHistory>();
         foreach (var scraper in _scrapers)
         {
-            // Order by Id, not StartedAt — SQLite's EF provider can't translate
-            // ORDER BY on DateTimeOffset, and Id is monotonic with insertion
-            // order so it gives the same newest-first result.
             var recent = await _db.ScrapeRuns
                 .Where(r => r.Source == scraper.SourceId)
-                .OrderByDescending(r => r.Id)
+                .OrderByDescending(r => r.StartedAt)
                 .Take(HistoryWindow)
                 .ToListAsync();
             list.Add(new SourceHistory(scraper.SourceId, recent));
