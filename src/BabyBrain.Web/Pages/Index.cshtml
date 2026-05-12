@@ -63,6 +63,8 @@ else
             url = x.r.SourceUrl,
             color = Categories.Color(x.r.Category),
             category = Categories.Label(x.r.Category),
+            postcode = x.r.Postcode,
+            event_key = x.r.ExternalKey,
         })
         .ToList();
     var mapJson = System.Text.Json.JsonSerializer.Serialize(mapPoints);
@@ -93,6 +95,27 @@ else
     {
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
               integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+        <style>
+            /* Flash highlight when a card is jumped to from the map */
+            @@keyframes bb-card-flash {
+                0%   { box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.85); }
+                100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
+            }
+            .event-card.bb-card-flash { animation: bb-card-flash 1.6s ease-out; }
+            .event-card:hover { transform: translateY(-1px); transition: transform .1s ease-out; }
+            .bb-go-btn {
+                display: inline-block;
+                margin-top: .35rem;
+                padding: .15rem .55rem;
+                background: #0d6efd;
+                color: #fff !important;
+                border-radius: 999px;
+                font-weight: 600;
+                text-decoration: none !important;
+                font-size: .85em;
+            }
+            .bb-go-btn:hover { background: #0b5ed7; }
+        </style>
         <div id="map" style="height: 380px; border-radius: 0.5rem;" class="mb-4"></div>
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
                 integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -104,30 +127,82 @@ else
                     maxZoom: 19, attribution: '© OpenStreetMap'
                 }).addTo(map);
                 var group = L.featureGroup();
+
                 function esc(s) {
                     return String(s).replace(/[&<>"']/g, function (c) {
                         return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
                     });
                 }
+
+                // event_key → marker, so card clicks can open the matching marker popup.
+                var markersByKey = {};
+
                 points.forEach(function (p) {
+                    // Walking-mode directions; origin left blank so Google Maps uses
+                    // the user's current location (prompts for permission). Step-free
+                    // is implicit for walking on UK pavements.
+                    var goUrl = 'https://www.google.com/maps/dir/?api=1' +
+                                '&destination=' + encodeURIComponent(p.postcode) +
+                                '&travelmode=walking';
+
                     var html = '<strong>' + esc(p.name) + '</strong><br>' +
                                esc(p.venue) + '<br>' +
                                esc(p.date) + ' · ' + esc(p.time) +
-                               '<br><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:' + esc(p.color) + ';margin-right:.25rem"></span>' +
-                               esc(p.category);
+                               '<br><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:' +
+                                 esc(p.color) + ';margin-right:.25rem"></span>' +
+                               esc(p.category) +
+                               '<br><a class="bb-go-btn" href="' + esc(goUrl) + '" target="_blank" rel="noopener">GO! 🚶</a>';
                     if (p.url) {
-                        html += '<br><a href="' + esc(p.url) + '" target="_blank" rel="noopener">Source</a>';
+                        html += ' <a href="' + esc(p.url) + '" target="_blank" rel="noopener" style="font-size:.85em">Source</a>';
                     }
-                    L.circleMarker([p.lat, p.lng], {
+
+                    var marker = L.circleMarker([p.lat, p.lng], {
                         radius: 8,
                         color: '#fff',
                         weight: 2,
                         fillColor: p.color,
                         fillOpacity: 0.9
                     }).bindPopup(html).addTo(group);
+
+                    markersByKey[p.event_key] = marker;
+
+                    // Marker → card: scroll to the matching card and flash it.
+                    marker.on('click', function () {
+                        var card = document.querySelector('[data-event-key="' + cssEscape(p.event_key) + '"]');
+                        if (!card) return;
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        card.classList.remove('bb-card-flash');
+                        // Force a reflow so re-adding the class re-triggers the animation.
+                        void card.offsetWidth;
+                        card.classList.add('bb-card-flash');
+                    });
                 });
+
                 group.addTo(map);
                 map.fitBounds(group.getBounds().pad(0.15));
+
+                // Card → marker: scroll the map into view and open the popup.
+                document.querySelectorAll('.event-card').forEach(function (card) {
+                    card.addEventListener('click', function (ev) {
+                        // Don't hijack clicks on actual links inside the card (e.g. Source).
+                        if (ev.target.closest('a')) return;
+                        var key = card.getAttribute('data-event-key');
+                        var marker = markersByKey[key];
+                        if (!marker) return;
+                        var mapEl = document.getElementById('map');
+                        mapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: 0.6 });
+                        marker.openPopup();
+                    });
+                });
+
+                // CSS.escape polyfill — keys contain colons which CSS would interpret.
+                function cssEscape(s) {
+                    if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
+                    return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) {
+                        return '\\' + c;
+                    });
+                }
             })();
         </script>
     }
