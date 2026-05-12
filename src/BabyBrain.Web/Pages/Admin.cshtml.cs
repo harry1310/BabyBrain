@@ -1,7 +1,6 @@
 using BabyBrain.Scrapers;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Services;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,73 +11,28 @@ public class AdminModel : PageModel
     private const int HistoryWindow = 5;
 
     private readonly BabyBrainDbContext _db;
-    private readonly ScrapeRunner _runner;
     private readonly IEnumerable<IScraper> _scrapers;
-    private readonly ILogger<AdminModel> _logger;
+    private readonly IScrapeStatusTracker _statusTracker;
 
-    public AdminModel(BabyBrainDbContext db, ScrapeRunner runner, IEnumerable<IScraper> scrapers, ILogger<AdminModel> logger)
+    public AdminModel(BabyBrainDbContext db, IEnumerable<IScraper> scrapers, IScrapeStatusTracker statusTracker)
     {
         _db = db;
-        _runner = runner;
         _scrapers = scrapers;
-        _logger = logger;
+        _statusTracker = statusTracker;
     }
 
-    public ScrapeResult? LastResult { get; private set; }
-    public string? LastRunError { get; private set; }
     public int TotalEvents { get; private set; }
     public int DistinctSources { get; private set; }
     public DateOnly? EarliestDate { get; private set; }
     public DateOnly? LatestDate { get; private set; }
     public IReadOnlyList<SourceHistory> History { get; private set; } = Array.Empty<SourceHistory>();
+    public IReadOnlyCollection<string> RunningSources { get; private set; } = Array.Empty<string>();
 
     public async Task OnGetAsync()
     {
         await LoadStatsAsync();
         await LoadHistoryAsync();
-    }
-
-    public async Task<IActionResult> OnPostAsync()
-    {
-        try
-        {
-            LastResult = await _runner.RunAllAsync();
-        }
-        catch (Exception ex)
-        {
-            // ScrapeRunner now catches per-scraper. Anything that escapes here is
-            // a system-level fault (DB unavailable, geocoder pass crashed, etc.).
-            _logger.LogError(ex, "Scrape run had an unrecoverable error");
-            LastRunError = ex.Message;
-        }
-        await LoadStatsAsync();
-        await LoadHistoryAsync();
-        return Page();
-    }
-
-    public async Task<IActionResult> OnPostRunOneAsync(string source)
-    {
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            LastRunError = "Source required.";
-        }
-        else
-        {
-            try
-            {
-                var result = await _runner.RunByIdAsync(source);
-                if (result is null) LastRunError = $"Unknown source: {source}";
-                else LastResult = result;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Single-source rerun failed for {Source}", source);
-                LastRunError = ex.Message;
-            }
-        }
-        await LoadStatsAsync();
-        await LoadHistoryAsync();
-        return Page();
+        RunningSources = _statusTracker.RunningSources;
     }
 
     private async Task LoadStatsAsync()

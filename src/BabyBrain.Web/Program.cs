@@ -46,6 +46,7 @@ builder.Services.AddHttpClient<TflJourneyService>(c =>
     c.Timeout = TimeSpan.FromSeconds(8);
     c.DefaultRequestHeaders.Add("User-Agent", "BabyBrain/1.0 (+https://github.com/harry1310/BabyBrain)");
 });
+builder.Services.AddSingleton<IScrapeStatusTracker, ScrapeStatusTracker>();
 builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 builder.Services.AddScoped<ScrapeRunner>();
@@ -120,4 +121,68 @@ app.MapGet("/api/step-free-journey", async (
     return Results.Json(result);
 });
 
+// Async scrape endpoints — under /Admin so they inherit the basic auth gate.
+// Each POST queues a fire-and-forget Task.Run and returns immediately so the
+// browser doesn't sit blocked while a scrape grinds; the Admin UI polls
+// /Admin/api/source-status to know when to refresh.
+app.MapPost("/Admin/api/rerun-source", (
+    RerunSourceRequest req,
+    IScrapeStatusTracker tracker,
+    IServiceProvider services,
+    ILogger<Program> logger) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Source))
+        return Results.BadRequest(new { error = "source required" });
+
+    if (!tracker.TryStart(req.Source))
+        return Results.Json(new { queued = false, message = "Already running" });
+
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            using var scope = services.CreateScope();
+            var runner = scope.ServiceProvider.GetRequiredService<ScrapeRunner>();
+            await runner.RunByIdAsync(req.Source);
+        }
+        catch (Exception ex) { logger.LogError(ex, "Background rerun failed for {Source}", req.Source); }
+        finally { tracker.Finish(req.Source); }
+    });
+
+    return Results.Json(new { queued = true });
+});
+
+app.MapPost("/Admin/api/rerun-all", (
+    IEnumerable<IScraper> scrapers,
+    IScrapeStatusTracker tracker,
+    IServiceProvider services,
+    ILogger<Program> logger) =>
+{
+    var queued = new List<string>();
+    foreach (var s in scrapers)
+        if (tracker.TryStart(s.SourceId)) queued.Add(s.SourceId);
+
+    if (queued.Count == 0)
+        return Results.Json(new { queued = 0, message = "All sources already running" });
+
+    _ = Task.Run(async () =>
+    {
+        using var scope = services.CreateScope();
+        var runner = scope.ServiceProvider.GetRequiredService<ScrapeRunner>();
+        foreach (var src in queued)
+        {
+            try { await runner.RunByIdAsync(src); }
+            catch (Exception ex) { logger.LogError(ex, "Background rerun-all failed for {Source}", src); }
+            finally { tracker.Finish(src); }
+        }
+    });
+
+    return Results.Json(new { queued = queued.Count });
+});
+
+app.MapGet("/Admin/api/source-status", (IScrapeStatusTracker tracker) =>
+    Results.Json(new { running = tracker.RunningSources }));
+
 app.Run();
+
+public sealed record RerunSourceRequest(string Source);

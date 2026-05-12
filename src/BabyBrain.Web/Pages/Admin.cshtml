@@ -1,71 +1,29 @@
 @page
 @using BabyBrain.Web.Data
-@using BabyBrain.Web.Services
 @model AdminModel
 @{
     ViewData["Title"] = "Admin";
+    var runningSet = Model.RunningSources.ToHashSet();
 }
 
 <h1>Admin</h1>
-<p class="text-muted">Trigger a scraper run. Each source is run independently — one failing source no longer aborts the others.</p>
+<p class="text-muted">
+    Trigger a scraper run. Each source runs independently in the background —
+    the page polls for completion and refreshes when scrapes finish, so you
+    don't need to keep the tab open.
+</p>
 
-<form method="post">
-    <button type="submit" class="btn btn-primary">Run all scrapers now</button>
-</form>
-
-@if (Model.LastResult is { } result)
-{
-    var alertClass = result.AllSucceeded ? "alert-success" : "alert-warning";
-    <div class="alert @alertClass mt-4">
-        <strong>@(result.AllSucceeded ? "All scrapers succeeded." : "Some scrapers failed.")</strong>
-        @result.TotalRows rows in total · @result.NewGeocodes new postcodes geocoded.
-    </div>
-
-    <table class="table table-sm mt-3">
-        <thead>
-            <tr>
-                <th>Source</th>
-                <th class="text-center">Status</th>
-                <th class="text-end">Rows</th>
-                <th>Detail</th>
-            </tr>
-        </thead>
-        <tbody>
-        @foreach (var o in result.Outcomes)
-        {
-            <tr>
-                <td><span class="font-monospace small">@o.Source</span></td>
-                <td class="text-center">
-                    @if (o.Success)
-                    {
-                        <span class="text-success fs-5" title="Success">✓</span>
-                    }
-                    else
-                    {
-                        <span class="text-danger fs-5" title="Failed">✗</span>
-                    }
-                </td>
-                <td class="text-end">@o.Rows</td>
-                <td class="small text-muted">@(o.Error ?? "")</td>
-            </tr>
-        }
-        </tbody>
-    </table>
-}
-@if (Model.LastRunError is { } err)
-{
-    <div class="alert alert-danger mt-4">
-        <strong>Run failed at the system level:</strong> @err
-    </div>
-}
+<button type="button" id="bb-run-all-btn" class="btn btn-primary">Run all scrapers now</button>
+<span id="bb-run-feedback" class="ms-3 text-muted small"></span>
 
 <h2 class="mt-5">Recent runs</h2>
 <p class="text-muted small">
     Status icon shows the latest run per source:
     <span class="text-success fw-semibold">✓</span> success ·
     <span class="text-danger fw-semibold">✗</span> failed ·
-    <span class="text-warning fw-semibold">⚠</span> succeeded but row count dropped to half or less of the previous successful run.
-    Cells show the last 5 runs, most recent first.
+    <span class="text-warning fw-semibold">⚠</span> succeeded but row count dropped to half or less of the previous successful run ·
+    spinner while a scrape is running.
+    Cells show the last 5 runs.
 </p>
 
 <table class="table table-sm align-middle">
@@ -81,10 +39,17 @@
     @foreach (var h in Model.History)
     {
         var latest = h.Recent.FirstOrDefault();
+        var isRunning = runningSet.Contains(h.Source);
         <tr>
             <td><span class="font-monospace small">@h.Source</span></td>
-            <td class="text-center">
-                @if (latest is null)
+            <td class="text-center" data-status-cell="@h.Source">
+                @if (isRunning)
+                {
+                    <span class="spinner-border spinner-border-sm text-primary" role="status" title="Scrape running…">
+                        <span class="visually-hidden">Running…</span>
+                    </span>
+                }
+                else if (latest is null)
                 {
                     <span class="text-muted" title="No runs yet">—</span>
                 }
@@ -127,10 +92,13 @@
                 }
             }
             <td class="text-end">
-                <form method="post" asp-page-handler="RunOne" class="d-inline">
-                    <input type="hidden" name="source" value="@h.Source" />
-                    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-run just this scraper">Re-run</button>
-                </form>
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary bb-rerun-btn"
+                        data-source="@h.Source"
+                        @(isRunning ? "disabled" : "")
+                        title="Re-run just this scraper in the background">
+                    Re-run
+                </button>
             </td>
         </tr>
     }
@@ -144,3 +112,105 @@
     <dt>Earliest date</dt><dd>@(Model.EarliestDate?.ToString("yyyy-MM-dd") ?? "—")</dd>
     <dt>Latest date</dt><dd>@(Model.LatestDate?.ToString("yyyy-MM-dd") ?? "—")</dd>
 </dl>
+
+<script>
+(function () {
+    var SPINNER_HTML = '<span class="spinner-border spinner-border-sm text-primary" role="status" title="Scrape running…"><span class="visually-hidden">Running…</span></span>';
+    var pollTimer = null;
+    var feedbackEl = document.getElementById('bb-run-feedback');
+
+    document.getElementById('bb-run-all-btn').addEventListener('click', function () {
+        feedbackEl.textContent = 'Queuing…';
+        fetch('/Admin/api/rerun-all', { method: 'POST' })
+            .then(parseJson)
+            .then(function (data) {
+                if (data.queued > 0) {
+                    feedbackEl.textContent = 'Queued ' + data.queued + ' source' + (data.queued === 1 ? '' : 's') + '. Background scrape running — page will refresh when done.';
+                    setAllSpinners();
+                    startPolling();
+                } else {
+                    feedbackEl.textContent = data.message || 'Nothing queued.';
+                }
+            })
+            .catch(function (err) {
+                feedbackEl.textContent = 'Failed to queue: ' + err.message;
+            });
+    });
+
+    document.body.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('.bb-rerun-btn');
+        if (!btn) return;
+        ev.preventDefault();
+        var source = btn.getAttribute('data-source');
+        if (!source) return;
+        btn.disabled = true;
+        setSpinner(source);
+        fetch('/Admin/api/rerun-source', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: source })
+        }).then(parseJson)
+          .then(function (data) {
+              // Whether newly queued or already running, poll until done.
+              startPolling();
+          })
+          .catch(function (err) {
+              btn.disabled = false;
+              feedbackEl.textContent = 'Failed to queue ' + source + ': ' + err.message;
+              // Revert the spinner so the user can retry.
+              window.location.reload();
+          });
+    });
+
+    function setSpinner(source) {
+        var cell = document.querySelector('[data-status-cell="' + cssEscape(source) + '"]');
+        if (cell) cell.innerHTML = SPINNER_HTML;
+    }
+
+    function setAllSpinners() {
+        document.querySelectorAll('[data-status-cell]').forEach(function (cell) {
+            cell.innerHTML = SPINNER_HTML;
+        });
+        document.querySelectorAll('.bb-rerun-btn').forEach(function (b) { b.disabled = true; });
+    }
+
+    function startPolling() {
+        if (pollTimer) return;
+        pollTimer = setInterval(pollStatus, 2000);
+        pollStatus(); // immediate first check
+    }
+
+    function pollStatus() {
+        fetch('/Admin/api/source-status')
+            .then(parseJson)
+            .then(function (data) {
+                var running = data.running || [];
+                if (running.length === 0) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                    // Reload so the new ScrapeRun rows appear in the history table.
+                    window.location.reload();
+                }
+            })
+            .catch(function () { /* transient — keep polling */ });
+    }
+
+    function parseJson(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }
+
+    function cssEscape(s) {
+        if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
+        return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; });
+    }
+
+    // On load — if the server marked any sources as already running (e.g. the
+    // user reloaded mid-scrape), pick up polling so the page refreshes when
+    // they finish.
+    @if (Model.RunningSources.Count > 0)
+    {
+        <text>startPolling();</text>
+    }
+})();
+</script>
