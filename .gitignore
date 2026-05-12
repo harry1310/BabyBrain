@@ -1,0 +1,32 @@
+# .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Local Claude config
+.claude/
+
+# Local data
+**/App_Data/
+data/
+
+# Secrets
+.env
+.env.local
+
+# Logs
+*.log
+webapp.err.log
+webapp.log
+
+# OS
+.DS_Store
+Thumbs.db

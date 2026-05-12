@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BabyBrain.Scrapers/BabyBrain.Scrapers.csproj" />
+    <Project Path="src/BabyBrain.Web/BabyBrain.Web.csproj" />
+  </Folder>
+</Solution>

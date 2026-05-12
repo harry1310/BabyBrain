@@ -1,0 +1,166 @@
+@page
+@using BabyBrain.Scrapers.Domain
+@model IndexModel
+@{
+    ViewData["Title"] = "Find baby & toddler events";
+    var ranges = new[] { ("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("custom", "Pick a date") };
+}
+
+<h1 class="mb-4">What's on for little ones</h1>
+
+<form method="get" class="card p-3 mb-4 bg-light">
+    <div class="mb-3">
+        <label class="form-label fw-semibold mb-2">When?</label>
+        <div class="d-flex flex-wrap gap-2" role="radiogroup">
+            @foreach (var (key, label) in ranges)
+            {
+                var checkedAttr = Model.Filter.Range == key ? "checked" : null;
+                <input type="radio" class="btn-check" name="range" id="range-@key" value="@key" @checkedAttr
+                       onchange="document.getElementById('customDateRow').classList.toggle('d-none', this.value !== 'custom')" />
+                <label class="btn btn-outline-primary" for="range-@key">@label</label>
+            }
+        </div>
+    </div>
+
+    <div id="customDateRow" class="mb-3 @(Model.Filter.Range == "custom" ? "" : "d-none")">
+        <label for="date" class="form-label fw-semibold">Date</label>
+        <input type="date" id="date" name="date"
+               value="@(Model.Filter.SpecificDate?.ToString("yyyy-MM-dd"))"
+               class="form-control" style="max-width:14rem" />
+    </div>
+
+    <div class="row g-3 align-items-end">
+        <div class="col-md-6">
+            <label for="ageMonths" class="form-label fw-semibold">How old is your child? <span class="text-muted">(months)</span></label>
+            <input type="number" min="0" max="60" id="ageMonths" name="ageMonths" value="@Model.Filter.AgeMonths"
+                   class="form-control" placeholder="e.g. 9" style="max-width:10rem" />
+        </div>
+        <div class="col-md-3">
+            <button type="submit" class="btn btn-primary w-100">Search</button>
+        </div>
+    </div>
+</form>
+
+@if (Model.Results.Count == 0)
+{
+    <p class="text-muted">No events match those filters. If the database is empty, try
+        <a asp-page="/Admin">Run a scrape</a>.</p>
+}
+else
+{
+    var mapPoints = Model.Results
+        .Where(r => !string.IsNullOrEmpty(r.Postcode))
+        .Select(r => new { r, key = BabyBrain.Web.Data.Geocode.Normalise(r.Postcode!) })
+        .Where(x => Model.PostcodeCoords.ContainsKey(x.key))
+        .Select(x => new
+        {
+            lat = Model.PostcodeCoords[x.key].Lat,
+            lng = Model.PostcodeCoords[x.key].Lng,
+            name = x.r.SessionName,
+            venue = x.r.VenueName,
+            date = x.r.Date.ToString("ddd d MMM"),
+            time = x.r.StartTime.ToString("HH:mm"),
+            url = x.r.SourceUrl,
+            color = Categories.Color(x.r.Category),
+            category = Categories.Label(x.r.Category),
+        })
+        .ToList();
+    var mapJson = System.Text.Json.JsonSerializer.Serialize(mapPoints);
+
+    var legendCategories = Model.Results
+        .Select(r => r.Category)
+        .Distinct()
+        .OrderBy(c => c)
+        .ToList();
+
+    <p class="text-muted">@Model.Results.Count event@(Model.Results.Count == 1 ? "" : "s") found.</p>
+
+    @if (legendCategories.Count > 0)
+    {
+        <div class="d-flex flex-wrap gap-3 align-items-center mb-3 small text-muted">
+            <span class="fw-semibold text-body">Categories:</span>
+            @foreach (var cat in legendCategories)
+            {
+                <span class="d-inline-flex align-items-center gap-1">
+                    <span style="display:inline-block; width:.7rem; height:.7rem; border-radius:50%; background:@Categories.Color(cat); border:1px solid rgba(0,0,0,.15);"></span>
+                    <span>@Categories.Label(cat)</span>
+                </span>
+            }
+        </div>
+    }
+
+    @if (mapPoints.Count > 0)
+    {
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+              integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+        <div id="map" style="height: 380px; border-radius: 0.5rem;" class="mb-4"></div>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+                integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+        <script>
+            (function () {
+                var points = @Html.Raw(mapJson);
+                var map = L.map('map');
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19, attribution: '© OpenStreetMap'
+                }).addTo(map);
+                var group = L.featureGroup();
+                function esc(s) {
+                    return String(s).replace(/[&<>"']/g, function (c) {
+                        return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+                    });
+                }
+                points.forEach(function (p) {
+                    var html = '<strong>' + esc(p.name) + '</strong><br>' +
+                               esc(p.venue) + '<br>' +
+                               esc(p.date) + ' · ' + esc(p.time) +
+                               '<br><span style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:' + esc(p.color) + ';margin-right:.25rem"></span>' +
+                               esc(p.category);
+                    if (p.url) {
+                        html += '<br><a href="' + esc(p.url) + '" target="_blank" rel="noopener">Source</a>';
+                    }
+                    L.circleMarker([p.lat, p.lng], {
+                        radius: 8,
+                        color: '#fff',
+                        weight: 2,
+                        fillColor: p.color,
+                        fillOpacity: 0.9
+                    }).bindPopup(html).addTo(group);
+                });
+                group.addTo(map);
+                map.fitBounds(group.getBounds().pad(0.15));
+            })();
+        </script>
+    }
+
+    @foreach (var dayGroup in Model.Results.GroupBy(e => e.Date).OrderBy(g => g.Key))
+    {
+        var morning = dayGroup.Where(e => e.StartTime.Hour < 12).OrderBy(e => e.StartTime).ToList();
+        var afternoon = dayGroup.Where(e => e.StartTime.Hour >= 12).OrderBy(e => e.StartTime).ToList();
+
+        <h2 class="h4 mt-4 mb-3">@dayGroup.Key.ToString("dddd d MMMM")</h2>
+        <div class="row g-3">
+            <div class="col-md-6">
+                <h3 class="h6 text-uppercase text-muted mb-2">Morning</h3>
+                @if (morning.Count == 0)
+                {
+                    <p class="text-muted small fst-italic">Nothing on.</p>
+                }
+                else
+                {
+                    @foreach (var ev in morning) { @await Html.PartialAsync("_EventCard", ev) }
+                }
+            </div>
+            <div class="col-md-6">
+                <h3 class="h6 text-uppercase text-muted mb-2">Afternoon</h3>
+                @if (afternoon.Count == 0)
+                {
+                    <p class="text-muted small fst-italic">Nothing on.</p>
+                }
+                else
+                {
+                    @foreach (var ev in afternoon) { @await Html.PartialAsync("_EventCard", ev) }
+                }
+            </div>
+        </div>
+    }
+}

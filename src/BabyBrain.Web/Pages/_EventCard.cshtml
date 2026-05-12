@@ -1,0 +1,34 @@
+@model BabyBrain.Scrapers.Domain.EventOccurrence
+@{
+    var accent = BabyBrain.Scrapers.Domain.Categories.Color(Model.Category);
+    var categoryLabel = BabyBrain.Scrapers.Domain.Categories.Label(Model.Category);
+}
+
+<div class="card mb-2" style="border-left: 4px solid @accent;">
+    <div class="card-body d-flex gap-3 align-items-start py-3">
+        <div class="text-center" style="min-width:5rem">
+            <div class="display-6 fw-bold text-primary" style="line-height:1">@Model.StartTime.ToString("HH:mm")</div>
+            @if (Model.EndTime is { } end)
+            {
+                <div class="small text-muted">to @end.ToString("HH:mm")</div>
+            }
+        </div>
+        <div class="flex-grow-1">
+            <h4 class="h6 mb-1">@Model.SessionName</h4>
+            <div class="small">@Model.VenueName@(Model.Postcode is null ? "" : $" · {Model.Postcode}")</div>
+            <div class="small text-muted mt-1">
+                <span class="d-inline-block me-1" style="width:.55rem; height:.55rem; border-radius:50%; background:@accent;"></span>
+                <span>@categoryLabel · </span>
+                @if (Model.MinAgeMonths is int min && Model.MaxAgeMonths is int max)
+                {
+                    <span>Ages @min–@max mo · </span>
+                }
+                @if (Model.TermTimeOnly) { <span>Term-time only · </span> }
+                @if (!string.IsNullOrEmpty(Model.SourceUrl))
+                {
+                    <a href="@Model.SourceUrl" target="_blank" rel="noopener">Source</a>
+                }
+            </div>
+        </div>
+    </div>
+</div>

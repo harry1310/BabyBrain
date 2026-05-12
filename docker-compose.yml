@@ -1,0 +1,12 @@
+services:
+  babybrain:
+    build: .
+    container_name: babybrain
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BABYBRAIN_DB_PATH: /data/babybrain.db
+    ports:
+      - "80:8080"
+    volumes:
+      - ./data:/data
