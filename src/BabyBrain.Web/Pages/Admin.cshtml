@@ -105,6 +105,59 @@
     </tbody>
 </table>
 
+<h2 class="mt-5">Reported events</h2>
+<p class="text-muted small">
+    Submitted via the "Report mistake" button on the public event cards.
+    Once you've fixed it (or decided no fix is needed), click <strong>Mark fixed</strong>
+    to clear the flag. The flag is preserved across scrapes, so you can deal with
+    them at your own pace.
+</p>
+
+@if (Model.Reported.Count == 0)
+{
+    <p class="text-muted fst-italic">Nothing reported.</p>
+}
+else
+{
+    <table class="table table-sm align-middle" id="bb-reported-table">
+        <thead>
+            <tr>
+                <th>Reported</th>
+                <th>Event</th>
+                <th>Source</th>
+                <th>When</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var ev in Model.Reported)
+        {
+            <tr data-reported-row="@ev.ExternalKey">
+                <td class="small text-muted">@ev.ReportedAt?.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                <td>
+                    <div>@ev.SessionName</div>
+                    <div class="small text-muted">@ev.VenueName@(string.IsNullOrEmpty(ev.Postcode) ? "" : $" · {ev.Postcode}")</div>
+                </td>
+                <td><span class="font-monospace small">@ev.Source</span></td>
+                <td class="small">@ev.Date.ToString("yyyy-MM-dd") @ev.StartTime.ToString("HH:mm")</td>
+                <td class="text-end">
+                    @if (!string.IsNullOrEmpty(ev.SourceUrl))
+                    {
+                        <a href="@ev.SourceUrl" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary me-1">Open source</a>
+                    }
+                    <button type="button"
+                            class="btn btn-sm btn-outline-success bb-mark-fixed-btn"
+                            data-event-key="@ev.ExternalKey"
+                            title="Clear the reported flag for this event">
+                        Mark fixed
+                    </button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
 <h2 class="mt-5">Database</h2>
 <dl>
     <dt>Total event occurrences</dt><dd>@Model.TotalEvents</dd>
@@ -159,6 +212,40 @@
               feedbackEl.textContent = 'Failed to queue ' + source + ': ' + err.message;
               // Revert the spinner so the user can retry.
               window.location.reload();
+          });
+    });
+
+    // Mark a reported event as fixed: POST to /Admin/api/mark-fixed, then
+    // remove the row. If the table empties, replace it with the "nothing
+    // reported" placeholder paragraph.
+    document.body.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('.bb-mark-fixed-btn');
+        if (!btn) return;
+        ev.preventDefault();
+        var key = btn.getAttribute('data-event-key');
+        if (!key) return;
+        btn.disabled = true;
+        btn.textContent = 'Clearing…';
+        fetch('/Admin/api/mark-fixed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ externalKey: key })
+        }).then(parseJson)
+          .then(function () {
+              var row = document.querySelector('[data-reported-row="' + cssEscape(key) + '"]');
+              if (row) row.remove();
+              var table = document.getElementById('bb-reported-table');
+              if (table && !table.querySelector('tbody tr')) {
+                  var p = document.createElement('p');
+                  p.className = 'text-muted fst-italic';
+                  p.textContent = 'Nothing reported.';
+                  table.parentNode.replaceChild(p, table);
+              }
+          })
+          .catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Mark fixed';
+              alert('Failed to clear: ' + err.message);
           });
     });
 

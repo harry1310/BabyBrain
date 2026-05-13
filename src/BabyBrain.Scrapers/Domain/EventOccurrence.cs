@@ -41,4 +41,9 @@ public class EventOccurrence
 
     // Set on every upsert so we can prune stale rows the source no longer lists.
     public DateTimeOffset LastSeenAt { get; set; }
+
+    // Set by the public POST /api/report-event when someone flags a row's
+    // details as wrong. Cleared by Admin's "Mark fixed". MUST be preserved
+    // across scrape upserts — the scraper never writes this field.
+    public DateTimeOffset? ReportedAt { get; set; }
 }

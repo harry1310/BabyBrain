@@ -35,7 +35,12 @@
                 @if (!string.IsNullOrEmpty(Model.SourceUrl))
                 {
                     <a href="@Model.SourceUrl" target="_blank" rel="noopener">Source</a>
+                    <span class="mx-1">·</span>
                 }
+                <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-muted bb-report-btn"
+                        data-event-key="@Model.ExternalKey" style="font-size:inherit; text-decoration:none;">
+                    Report mistake
+                </button>
             </div>
         </div>
     </div>

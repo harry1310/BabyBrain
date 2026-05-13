@@ -45,6 +45,11 @@ public class BabyBrainDbContext : DbContext
         e.HasIndex(x => x.Source);
         e.HasIndex(x => x.Category);
         e.Property(x => x.LastSeenAt).HasConversion(DateTimeOffsetConverter);
+        // Nullable variant — same wire format, just null-tolerant on both ends.
+        e.Property(x => x.ReportedAt).HasConversion(
+            dto => dto == null ? null : dto.Value.ToString(DateTimeOffsetWriteFormat, CultureInfo.InvariantCulture),
+            s => s == null ? null : DateTimeOffset.ParseExact(s, DateTimeOffsetReadFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
+        e.HasIndex(x => x.ReportedAt);
         e.Property(x => x.Date).HasConversion(
             d => d.ToString("yyyy-MM-dd"),
             s => DateOnly.ParseExact(s, "yyyy-MM-dd"));

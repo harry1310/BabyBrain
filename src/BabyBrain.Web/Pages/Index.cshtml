@@ -195,8 +195,10 @@ else
                 document.body.addEventListener('click', function (ev) {
                     var card = ev.target.closest('.event-card');
                     if (!card) return;
-                    // Don't hijack clicks on actual links inside the card.
+                    // Don't hijack clicks on actual links inside the card,
+                    // or on the Report-mistake button.
                     if (ev.target.closest('a')) return;
+                    if (ev.target.closest('.bb-report-btn')) return;
                     setActiveCard(card);
                     var key = card.getAttribute('data-event-key');
                     var marker = markersByKey[key];
@@ -395,6 +397,64 @@ else
                     }
                 }
 
+                // Report-mistake flow: card button stashes the externalKey on the
+                // modal's confirm button; clicking confirm POSTs to /api/report-event,
+                // shows a brief "Reported" message, then closes the modal.
+                document.body.addEventListener('click', function (ev) {
+                    var btn = ev.target.closest('.bb-report-btn');
+                    if (!btn) return;
+                    var key = btn.getAttribute('data-event-key');
+                    if (!key) return;
+                    var confirmBtn = document.getElementById('bb-report-confirm');
+                    var body = document.getElementById('bb-report-modal-body');
+                    if (confirmBtn) {
+                        confirmBtn.setAttribute('data-event-key', key);
+                        confirmBtn.disabled = false;
+                        confirmBtn.textContent = 'Report';
+                    }
+                    if (body) {
+                        body.innerHTML = "Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.";
+                    }
+                    var modalEl = document.getElementById('bb-report-modal');
+                    if (modalEl && window.bootstrap && bootstrap.Modal) {
+                        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+                    }
+                });
+
+                document.body.addEventListener('click', function (ev) {
+                    var btn = ev.target.closest('#bb-report-confirm');
+                    if (!btn) return;
+                    var key = btn.getAttribute('data-event-key');
+                    if (!key) return;
+                    btn.disabled = true;
+                    btn.textContent = 'Reporting…';
+                    fetch('/api/report-event', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ externalKey: key })
+                    }).then(function (r) {
+                        var body = document.getElementById('bb-report-modal-body');
+                        var modalEl = document.getElementById('bb-report-modal');
+                        if (!r.ok) {
+                            if (body) body.innerHTML = '<div class="alert alert-warning mb-0">Sorry, that didn\'t go through. Try again later.</div>';
+                            btn.disabled = false;
+                            btn.textContent = 'Report';
+                            return;
+                        }
+                        if (body) body.innerHTML = '<div class="alert alert-success mb-0">Reported — thanks. We\'ll take a look.</div>';
+                        btn.style.display = 'none';
+                        setTimeout(function () {
+                            if (modalEl && window.bootstrap && bootstrap.Modal) {
+                                bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+                            }
+                            btn.style.display = '';
+                        }, 1500);
+                    }).catch(function () {
+                        btn.disabled = false;
+                        btn.textContent = 'Report';
+                    });
+                });
+
                 // CSS.escape polyfill — keys contain colons which CSS would interpret.
                 function cssEscape(s) {
                     if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
@@ -449,6 +509,25 @@ else
             </div>
             <div class="modal-body" id="bb-journey-modal-body">
                 <p class="text-muted mb-0">Loading…</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal for "Report mistake" — confirms intent, POSTs to /api/report-event. -->
+<div class="modal fade" id="bb-report-modal" tabindex="-1" aria-labelledby="bb-report-modal-title" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bb-report-modal-title">Report a mistake</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="bb-report-modal-body">
+                Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="bb-report-confirm">Report</button>
             </div>
         </div>
     </div>

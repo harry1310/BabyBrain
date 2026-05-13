@@ -272,6 +272,42 @@ app.MapPost("/Admin/api/rerun-all", (
 app.MapGet("/Admin/api/source-status", (IScrapeStatusTracker tracker) =>
     Results.Json(new { running = tracker.RunningSources }));
 
+// Public "report a mistake" endpoint — fired by the dialog on every event
+// card. Idempotent; re-reporting just updates the timestamp.
+app.MapPost("/api/report-event", async (
+    ReportEventRequest req,
+    BabyBrainDbContext db,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.ExternalKey))
+        return Results.BadRequest(new { error = "externalKey required" });
+
+    var row = await db.EventOccurrences.FirstOrDefaultAsync(e => e.ExternalKey == req.ExternalKey, ct);
+    if (row is null) return Results.NotFound();
+
+    row.ReportedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync(ct);
+    return Results.Json(new { reported = true });
+});
+
+// Admin-only — clears the report flag once the issue is dealt with.
+app.MapPost("/Admin/api/mark-fixed", async (
+    ReportEventRequest req,
+    BabyBrainDbContext db,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.ExternalKey))
+        return Results.BadRequest(new { error = "externalKey required" });
+
+    var row = await db.EventOccurrences.FirstOrDefaultAsync(e => e.ExternalKey == req.ExternalKey, ct);
+    if (row is null) return Results.NotFound();
+
+    row.ReportedAt = null;
+    await db.SaveChangesAsync(ct);
+    return Results.Json(new { cleared = true });
+});
+
 app.Run();
 
 public sealed record RerunSourceRequest(string Source);
+public sealed record ReportEventRequest(string ExternalKey);

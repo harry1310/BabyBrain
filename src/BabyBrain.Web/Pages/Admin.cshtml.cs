@@ -1,4 +1,5 @@
 using BabyBrain.Scrapers;
+using BabyBrain.Scrapers.Domain;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Services;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -27,12 +28,22 @@ public class AdminModel : PageModel
     public DateOnly? LatestDate { get; private set; }
     public IReadOnlyList<SourceHistory> History { get; private set; } = Array.Empty<SourceHistory>();
     public IReadOnlyCollection<string> RunningSources { get; private set; } = Array.Empty<string>();
+    public IReadOnlyList<EventOccurrence> Reported { get; private set; } = Array.Empty<EventOccurrence>();
 
     public async Task OnGetAsync()
     {
         await LoadStatsAsync();
         await LoadHistoryAsync();
+        await LoadReportedAsync();
         RunningSources = _statusTracker.RunningSources;
+    }
+
+    private async Task LoadReportedAsync()
+    {
+        Reported = await _db.EventOccurrences
+            .Where(e => e.ReportedAt != null)
+            .OrderByDescending(e => e.ReportedAt)
+            .ToListAsync();
     }
 
     private async Task LoadStatsAsync()
