@@ -101,6 +101,7 @@ public sealed class FitzroviaTockifyScraper : IScraper
                     MinAgeMonths = session.MinAgeMonths,
                     MaxAgeMonths = session.MaxAgeMonths,
                     TermTimeOnly = false,
+                    IsFree = true,
                     LastSeenAt = now,
                 };
             }

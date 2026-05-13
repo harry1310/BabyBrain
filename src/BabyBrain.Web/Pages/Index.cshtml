@@ -336,7 +336,8 @@ else
                         (j.legs || []).forEach(function (leg) {
                             html += '<li class="mb-1">' + legIcon(leg.mode) + ' ' +
                                     '<strong>' + leg.durationMinutes + ' min</strong> · ';
-                            if (leg.lineName) html += esc(leg.lineName) + ' · ';
+                            var label = legLineLabel(leg);
+                            if (label) html += esc(label) + ' · ';
                             if (leg.mode === 'walking') {
                                 html += 'walk' + (leg.toName ? ' to ' + esc(leg.toName) : '');
                             } else {
@@ -357,6 +358,28 @@ else
                     var manualLink = 'https://tfl.gov.uk/plan-a-journey/?to=' + encodeURIComponent(postcode);
                     return '<div class="alert alert-warning mb-0">' + esc(message) +
                            '<br><a href="' + esc(manualLink) + '" target="_blank" rel="noopener">Open TfL Journey Planner manually →</a></div>';
+                }
+
+                function legLineLabel(leg) {
+                    if (!leg.lineName) return null;
+                    var label;
+                    switch (leg.mode) {
+                        case 'bus':
+                            label = 'Bus ' + leg.lineName;
+                            break;
+                        case 'tube':
+                        case 'overground':
+                        case 'dlr':
+                            label = leg.lineName + ' line';
+                            break;
+                        case 'elizabeth-line':
+                            // "Elizabeth" comes back as the line name; avoid "Elizabeth line line".
+                            label = /line$/i.test(leg.lineName) ? leg.lineName : leg.lineName + ' line';
+                            break;
+                        default:
+                            label = leg.lineName;
+                    }
+                    return leg.direction ? label + ' towards ' + leg.direction : label;
                 }
 
                 function legIcon(mode) {

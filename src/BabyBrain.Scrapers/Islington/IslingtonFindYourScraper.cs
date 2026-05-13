@@ -132,6 +132,7 @@ public sealed class IslingtonFindYourScraper : IScraper
                     MinAgeMonths = parsed.MinAge,
                     MaxAgeMonths = parsed.MaxAge,
                     TermTimeOnly = false,
+                    IsFree = true,
                     LastSeenAt = now,
                 };
             }

@@ -33,6 +33,12 @@ public class EventOccurrence
 
     public bool TermTimeOnly { get; set; }
 
+    // Cost in £. IsFree is the explicit "free" marker (scraper found "Free" text);
+    // Cost is the amount in pounds when scraped (typically the lowest ticket tier
+    // for sources with multiple price bands). Both null/false means unknown.
+    public bool IsFree { get; set; }
+    public decimal? Cost { get; set; }
+
     // Set on every upsert so we can prune stale rows the source no longer lists.
     public DateTimeOffset LastSeenAt { get; set; }
 }

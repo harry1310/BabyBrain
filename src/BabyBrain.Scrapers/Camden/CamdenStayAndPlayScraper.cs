@@ -73,6 +73,7 @@ public sealed class CamdenStayAndPlayScraper : IScraper
                             MinAgeMonths = currentAge.min,
                             MaxAgeMonths = currentAge.max,
                             TermTimeOnly = line.TermTimeOnly,
+                            IsFree = true,
                             LastSeenAt = now,
                         });
                     }

@@ -69,6 +69,32 @@ public static partial class TextParsing
         _ => null,
     };
 
+    // Extracts price intent from free text. "Free" wins outright; otherwise the
+    // lowest £N amount found is returned as the headline (under the "tickets
+    // from £X" mental model). Callers should strip out parenthetical fees /
+    // booking surcharges before passing in — the helper itself can't tell a
+    // £6 ticket from a £1 booking fee.
+    public static (bool IsFree, decimal? Cost) ParsePrice(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return (false, null);
+
+        // Match "Free" as a standalone word — avoid e.g. "free wifi" but allow
+        // "Free of charge" / "Free admission" / "Free entry".
+        if (Regex.IsMatch(text, @"\bfree\b(?:\s+(?:of\s+charge|admission|entry|event))?", RegexOptions.IgnoreCase))
+            return (true, null);
+
+        decimal? min = null;
+        foreach (Match m in Regex.Matches(text, @"£\s*(\d+(?:\.\d{1,2})?)"))
+        {
+            if (decimal.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            {
+                if (min is null || v < min) min = v;
+            }
+        }
+        return (false, min);
+    }
+
     public static IEnumerable<DateOnly> WeeklyDatesInWindow(DayOfWeek day, DateOnly from, DateOnly to)
     {
         var first = from;

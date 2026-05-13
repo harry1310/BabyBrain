@@ -24,6 +24,14 @@
                     <span>Ages @min–@max mo · </span>
                 }
                 @if (Model.TermTimeOnly) { <span>Term-time only · </span> }
+                @if (Model.IsFree)
+                {
+                    <span class="badge text-bg-success me-1">Free</span>
+                }
+                else if (Model.Cost is { } cost)
+                {
+                    <span class="badge text-bg-light border me-1">From £@cost.ToString("0.##")</span>
+                }
                 @if (!string.IsNullOrEmpty(Model.SourceUrl))
                 {
                     <a href="@Model.SourceUrl" target="_blank" rel="noopener">Source</a>

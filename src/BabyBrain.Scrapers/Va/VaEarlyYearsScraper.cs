@@ -14,10 +14,11 @@ namespace BabyBrain.Scrapers.Va;
 // actually contains every event, with early-years cards tagged via
 // data-wo-audience. We filter to that subset in code.
 //
-// v1 caveat: each card's startDate/endDate is the *first* and *last* occurrence
-// of a multi-week series; individual session dates live in the free-text
-// description. We emit one row per event at the startDate and leave per-session
-// expansion for v2.
+// Multi-week series are detected via startDate/endDate spanning more than one
+// day: we treat the cadence as weekly on startDate's day-of-week and emit one
+// row per occurrence inside the horizon. Per-session times come from the start
+// (time-of-day) and end (time-of-day, applied to every session) microdata.
+// Single-day cards continue to emit one row.
 public sealed class VaEarlyYearsScraper : IScraper
 {
     private const string ListingUrl = "https://www.vam.ac.uk/whatson?audience=early-years";
@@ -55,34 +56,40 @@ public sealed class VaEarlyYearsScraper : IScraper
             if (!tokens.Contains("early-years")) continue;
             if (tokens.Contains("schools") && !tokens.Contains("families")) continue;
 
-            var row = BuildRow(li, today, horizonEnd, now);
-            if (row is not null) rows.Add(row);
+            rows.AddRange(BuildRows(li, today, horizonEnd, now));
         }
         return rows;
     }
 
-    private EventOccurrence? BuildRow(IElement li, DateOnly from, DateOnly to, DateTimeOffset now)
+    private IEnumerable<EventOccurrence> BuildRows(IElement li, DateOnly from, DateOnly to, DateTimeOffset now)
     {
         var article = li.QuerySelector("article[itemtype='http://schema.org/Event']");
-        if (article is null) return null;
+        if (article is null) yield break;
 
         var name = article.QuerySelector("meta[itemprop='name']")?.GetAttribute("content")?.Trim() ?? "";
         var startRaw = article.QuerySelector("meta[itemprop='startDate']")?.GetAttribute("content")?.Trim();
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) return null;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) yield break;
 
-        if (!TryParseDateTime(startRaw, out var start)) return null;
-        var date = DateOnly.FromDateTime(start.LocalDateTime);
-        if (date < from || date > to) return null;
+        if (!TryParseDateTime(startRaw, out var start)) yield break;
+        var seriesFirst = DateOnly.FromDateTime(start.LocalDateTime);
+        var startTime = TimeOnly.FromDateTime(start.LocalDateTime);
 
         var endRaw = article.QuerySelector("meta[itemprop='endDate']")?.GetAttribute("content")?.Trim();
-        TimeOnly? endTime = null;
+        DateOnly seriesLast = seriesFirst;
+        TimeOnly? sessionEndTime = null;
         if (!string.IsNullOrEmpty(endRaw) && TryParseDateTime(endRaw, out var end))
         {
-            // Only use endTime when end is on the same day as start — otherwise
-            // it's the last day of a series, not the close of one session.
-            if (DateOnly.FromDateTime(end.LocalDateTime) == date)
-                endTime = TimeOnly.FromDateTime(end.LocalDateTime);
+            seriesLast = DateOnly.FromDateTime(end.LocalDateTime);
+            // The schema.org endDate carries the *last session's* end clock-time,
+            // which is the same slot every week — apply it to every occurrence.
+            sessionEndTime = TimeOnly.FromDateTime(end.LocalDateTime);
         }
+
+        // Drop the card entirely if the whole series sits outside the horizon.
+        if (seriesLast < from || seriesFirst > to) yield break;
+
+        var windowStart = seriesFirst < from ? from : seriesFirst;
+        var windowEnd = seriesLast > to ? to : seriesLast;
 
         var description = article.QuerySelector("meta[itemprop='description']")?.GetAttribute("content")?.Trim();
         var (minAge, maxAge) = TextParsing.ParseAgeRange((name + " " + description) ?? name);
@@ -92,26 +99,37 @@ public sealed class VaEarlyYearsScraper : IScraper
         var eventId = ExtractEventId(href);
 
         var venue = ResolveVenue(li.GetAttribute("data-wo-venue"));
+        var notes = string.IsNullOrEmpty(description) ? null : Truncate(description, 400);
 
-        return new EventOccurrence
+        // One-off (start and end on same calendar day) → single row.
+        // Series (start < end) → weekly cadence on seriesFirst's day-of-week.
+        var dates = seriesFirst == seriesLast
+            ? new[] { seriesFirst }.Where(d => d >= windowStart && d <= windowEnd)
+            : TextParsing.WeeklyDatesInWindow(seriesFirst.DayOfWeek, windowStart, windowEnd);
+
+        foreach (var date in dates)
         {
-            ExternalKey = $"{SourceId}:{eventId}:{date:yyyy-MM-dd}:{TimeOnly.FromDateTime(start.LocalDateTime):HHmm}",
-            Source = SourceId,
-            Category = Category,
-            SourceUrl = url,
-            Date = date,
-            StartTime = TimeOnly.FromDateTime(start.LocalDateTime),
-            EndTime = endTime,
-            SessionName = name,
-            SessionNotes = string.IsNullOrEmpty(description) ? null : Truncate(description, 400),
-            VenueName = venue.Name,
-            VenueAddress = venue.Address,
-            Postcode = venue.Postcode,
-            MinAgeMonths = minAge,
-            MaxAgeMonths = maxAge,
-            TermTimeOnly = false,
-            LastSeenAt = now,
-        };
+            yield return new EventOccurrence
+            {
+                ExternalKey = $"{SourceId}:{eventId}:{date:yyyy-MM-dd}:{startTime:HHmm}",
+                Source = SourceId,
+                Category = Category,
+                SourceUrl = url,
+                Date = date,
+                StartTime = startTime,
+                EndTime = sessionEndTime,
+                SessionName = name,
+                SessionNotes = notes,
+                VenueName = venue.Name,
+                VenueAddress = venue.Address,
+                Postcode = venue.Postcode,
+                MinAgeMonths = minAge,
+                MaxAgeMonths = maxAge,
+                TermTimeOnly = false,
+                IsFree = true,
+                LastSeenAt = now,
+            };
+        }
     }
 
     private record Venue(string Name, string Address, string Postcode);

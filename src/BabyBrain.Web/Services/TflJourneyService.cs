@@ -72,31 +72,53 @@ public sealed class TflJourneyService
         }
 
         var options = new List<JourneyOption>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var j in journeysEl.EnumerateArray())
         {
             var duration = TryGetInt(j, "duration");
             var fare = TryGetFare(j);
             var legs = new List<JourneyLeg>();
+            var sigParts = new List<string>();
 
             if (j.TryGetProperty("legs", out var legsEl) && legsEl.ValueKind == JsonValueKind.Array)
             {
                 foreach (var l in legsEl.EnumerateArray())
                 {
+                    var mode = TryGetModeName(l) ?? "unknown";
+                    var lineName = TryGetLineName(l);
+                    var direction = TryGetDirection(l);
+                    var fromName = TryGetPointName(l, "departurePoint");
+                    var toName = TryGetPointName(l, "arrivalPoint");
+
                     legs.Add(new JourneyLeg(
-                        Mode: TryGetModeName(l) ?? "unknown",
+                        Mode: mode,
                         DurationMinutes: TryGetInt(l, "duration") ?? 0,
-                        LineName: TryGetLineName(l),
-                        FromName: TryGetPointName(l, "departurePoint"),
-                        ToName: TryGetPointName(l, "arrivalPoint")));
+                        LineName: lineName,
+                        Direction: direction,
+                        FromName: fromName,
+                        ToName: toName));
+
+                    // Build the dedup signature from transit legs only. Walking
+                    // distances jitter between otherwise-identical journeys and
+                    // would defeat the dedup if included.
+                    if (!string.Equals(mode, "walking", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var fromKey = TryGetPointNaptan(l, "departurePoint") ?? fromName ?? "";
+                        var toKey = TryGetPointNaptan(l, "arrivalPoint") ?? toName ?? "";
+                        sigParts.Add($"{mode}|{lineName ?? ""}|{fromKey}->{toKey}");
+                    }
                 }
             }
+
+            var signature = sigParts.Count == 0 ? "walking-only" : string.Join(";", sigParts);
+            if (!seen.Add(signature)) continue;
 
             options.Add(new JourneyOption(
                 DurationMinutes: duration ?? legs.Sum(x => x.DurationMinutes),
                 Fare: fare,
                 Legs: legs));
 
-            if (options.Count >= 3) break; // top 3 only
+            if (options.Count >= 3) break; // top 3 after dedup
         }
 
         return new JourneyResponse(Success: true, Error: null, Journeys: options);
@@ -139,6 +161,29 @@ public sealed class TflJourneyService
         if (!pt.TryGetProperty("commonName", out var n)) return null;
         return n.GetString();
     }
+
+    private static string? TryGetPointNaptan(JsonElement leg, string field)
+    {
+        if (!leg.TryGetProperty(field, out var pt) || pt.ValueKind != JsonValueKind.Object) return null;
+        if (!pt.TryGetProperty("naptanId", out var n)) return null;
+        return n.GetString();
+    }
+
+    private static string? TryGetDirection(JsonElement leg)
+    {
+        if (!leg.TryGetProperty("routeOptions", out var routesEl) || routesEl.ValueKind != JsonValueKind.Array) return null;
+        foreach (var r in routesEl.EnumerateArray())
+        {
+            if (!r.TryGetProperty("directions", out var dirsEl) || dirsEl.ValueKind != JsonValueKind.Array) continue;
+            foreach (var d in dirsEl.EnumerateArray())
+            {
+                if (d.ValueKind != JsonValueKind.String) continue;
+                var s = d.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+            }
+        }
+        return null;
+    }
 }
 
 public sealed record JourneyResponse(bool Success, string? Error, IReadOnlyList<JourneyOption>? Journeys)
@@ -148,4 +193,4 @@ public sealed record JourneyResponse(bool Success, string? Error, IReadOnlyList<
 
 public sealed record JourneyOption(int DurationMinutes, string? Fare, IReadOnlyList<JourneyLeg> Legs);
 
-public sealed record JourneyLeg(string Mode, int DurationMinutes, string? LineName, string? FromName, string? ToName);
+public sealed record JourneyLeg(string Mode, int DurationMinutes, string? LineName, string? Direction, string? FromName, string? ToName);

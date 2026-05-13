@@ -32,6 +32,8 @@ public static class EventOccurrenceUpsert
                 current.MinAgeMonths = row.MinAgeMonths;
                 current.MaxAgeMonths = row.MaxAgeMonths;
                 current.TermTimeOnly = row.TermTimeOnly;
+                current.IsFree = row.IsFree;
+                current.Cost = row.Cost;
                 current.LastSeenAt = runAt;
             }
             else

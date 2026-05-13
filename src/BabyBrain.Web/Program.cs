@@ -6,6 +6,7 @@ using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
 using BabyBrain.Scrapers.Va;
+using BabyBrain.Scrapers.WigmoreHall;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Middleware;
 using BabyBrain.Web.Services;
@@ -73,6 +74,17 @@ builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
 builder.Services.AddScoped<IScraper, BritishMuseumScraper>();
 builder.Services.AddScoped<IScraper, SouthbankCentreScraper>();
 builder.Services.AddScoped<IScraper, VaEarlyYearsScraper>();
+
+// Wigmore needs a browser-shaped UA (CloudFront 403s on the bare default).
+// 30s timeout because we follow each listing item to its detail page for price.
+builder.Services.AddHttpClient<WigmoreHallUnderFivesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<WigmoreHallUnderFivesScraper>());
+
 builder.Services.AddHostedService<DailyScrapeService>();
 
 var app = builder.Build();

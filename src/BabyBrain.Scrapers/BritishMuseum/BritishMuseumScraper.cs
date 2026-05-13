@@ -135,6 +135,7 @@ public sealed class BritishMuseumScraper : IScraper
                         MinAgeMonths = minAge,
                         MaxAgeMonths = maxAge,
                         TermTimeOnly = false,
+                        IsFree = true,
                         LastSeenAt = now,
                     };
                 }
