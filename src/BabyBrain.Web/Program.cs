@@ -10,6 +10,8 @@ using BabyBrain.Scrapers.WigmoreHall;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Middleware;
 using BabyBrain.Web.Services;
+using BabyBrain.Web.Services.SelfHealing;
+using Anthropic;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 
@@ -56,9 +58,16 @@ builder.Services.AddScoped<ScrapeRunner>();
 // "harry1310/BabyBrain"), failing scrapes open a GitHub issue and recovering
 // scrapes close it. Otherwise alerting is a no-op so dev/local runs don't
 // need the token.
+//
+// Self-healing layers on top: when ANTHROPIC_API_KEY is also set AND a fresh
+// issue is opened, Claude is asked for a diagnosis + patch and a draft PR is
+// opened that closes the issue when merged.
 const string GhClientName = "github-alerts";
 var ghToken = builder.Configuration["BABYBRAIN_GH_TOKEN"];
 var ghRepo = builder.Configuration["BABYBRAIN_GH_REPO"];
+var anthropicKey = builder.Configuration["ANTHROPIC_API_KEY"];
+var claudeModel = builder.Configuration["BABYBRAIN_CLAUDE_MODEL"] ?? "claude-opus-4-7";
+
 if (!string.IsNullOrWhiteSpace(ghToken) && !string.IsNullOrWhiteSpace(ghRepo) && ghRepo.Contains('/'))
 {
     var parts = ghRepo.Split('/', 2);
@@ -66,16 +75,43 @@ if (!string.IsNullOrWhiteSpace(ghToken) && !string.IsNullOrWhiteSpace(ghRepo) &&
     var repo = parts[1];
     builder.Services.AddHttpClient(GhClientName, c =>
     {
+        // 60s here (was 10s) so the heal pipeline's slower calls — branch
+        // create, contents PUT, PR open — have headroom over a flaky link.
         c.BaseAddress = new Uri("https://api.github.com/");
-        c.Timeout = TimeSpan.FromSeconds(10);
+        c.Timeout = TimeSpan.FromSeconds(60);
         c.DefaultRequestHeaders.UserAgent.ParseAdd("BabyBrain-ScrapeAlerts/1.0");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         c.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ghToken);
         c.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     });
+
+    if (!string.IsNullOrWhiteSpace(anthropicKey))
+    {
+        var capturedKey = anthropicKey;
+        builder.Services.AddSingleton(_ => new AnthropicClient { ApiKey = capturedKey });
+        builder.Services.AddScoped<IClaudeHealer>(sp => new ClaudeHealer(
+            sp.GetRequiredService<AnthropicClient>(),
+            claudeModel,
+            sp.GetRequiredService<ILogger<ClaudeHealer>>()));
+        builder.Services.AddScoped(sp => new GitHubSourceFetcher(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
+            owner, repo, sp.GetRequiredService<ILogger<GitHubSourceFetcher>>()));
+        builder.Services.AddScoped(sp => new GitHubPatchPublisher(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
+            owner, repo, sp.GetRequiredService<ILogger<GitHubPatchPublisher>>()));
+        builder.Services.AddScoped<SelfHealingOrchestrator>();
+    }
+    else
+    {
+        builder.Services.AddScoped<IClaudeHealer, NoopClaudeHealer>();
+    }
+
     builder.Services.AddScoped<IScrapeAlertSink>(sp => new GitHubScrapeAlertSink(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
-        owner, repo, sp.GetRequiredService<ILogger<GitHubScrapeAlertSink>>()));
+        owner, repo,
+        // Resolve orchestrator only when Anthropic is configured — registered conditionally above.
+        !string.IsNullOrWhiteSpace(anthropicKey) ? sp.GetRequiredService<SelfHealingOrchestrator>() : null,
+        sp.GetRequiredService<ILogger<GitHubScrapeAlertSink>>()));
 }
 else
 {
