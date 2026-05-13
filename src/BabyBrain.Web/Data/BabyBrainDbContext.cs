@@ -12,6 +12,7 @@ public class BabyBrainDbContext : DbContext
     public DbSet<EventOccurrence> EventOccurrences => Set<EventOccurrence>();
     public DbSet<Geocode> Geocodes => Set<Geocode>();
     public DbSet<ScrapeRun> ScrapeRuns => Set<ScrapeRun>();
+    public DbSet<SourceSuggestion> SourceSuggestions => Set<SourceSuggestion>();
 
     // ISO-8601 with offset, single space separator. Adding an explicit
     // converter lets the LINQ translator see a string-typed column (so
@@ -65,5 +66,14 @@ public class BabyBrainDbContext : DbContext
         sr.HasIndex(x => new { x.Source, x.StartedAt });
         sr.Property(x => x.StartedAt).HasConversion(DateTimeOffsetConverter);
         sr.Property(x => x.CompletedAt).HasConversion(DateTimeOffsetConverter);
+
+        var ss = mb.Entity<SourceSuggestion>();
+        // Admin's "pending" list filters by ReviewedAt is null then sorts by SubmittedAt desc.
+        ss.HasIndex(x => x.ReviewedAt);
+        ss.Property(x => x.Url).HasMaxLength(500);
+        ss.Property(x => x.SubmittedAt).HasConversion(DateTimeOffsetConverter);
+        ss.Property(x => x.ReviewedAt).HasConversion(
+            dto => dto == null ? null : dto.Value.ToString(DateTimeOffsetWriteFormat, CultureInfo.InvariantCulture),
+            s => s == null ? null : DateTimeOffset.ParseExact(s, DateTimeOffsetReadFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
     }
 }

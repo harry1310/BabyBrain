@@ -38,14 +38,109 @@
     </div>
 
     <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2026 - BabyBrain.Web - <a asp-area="" asp-page="/Privacy">Privacy</a>
+        <div class="container d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <span>&copy; 2026 - BabyBrain.Web - <a asp-area="" asp-page="/Privacy">Privacy</a></span>
+            <span>
+                Want to see more on babybrain.uk?
+                <button type="button" class="btn btn-link p-0 align-baseline" id="bb-suggest-source-open"
+                        style="text-decoration:underline;">Suggest a source</button>
+            </span>
         </div>
     </footer>
+
+    <!-- Global "suggest a source" modal — POSTs a URL to /api/suggest-source. -->
+    <div class="modal fade" id="bb-suggest-modal" tabindex="-1" aria-labelledby="bb-suggest-modal-title" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="bb-suggest-modal-title">Suggest a source</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-2">
+                        Paste a link to a page that lists baby/toddler events you'd like BabyBrain to cover.
+                        We'll take a look and add it if we can.
+                    </p>
+                    <div id="bb-suggest-status"></div>
+                    <label for="bb-suggest-url" class="form-label visually-hidden">URL</label>
+                    <input type="url" id="bb-suggest-url" class="form-control" placeholder="https://example.com/whats-on" maxlength="500" />
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="bb-suggest-submit">Submit</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+
+    <script>
+    (function () {
+        var openBtn = document.getElementById('bb-suggest-source-open');
+        var modalEl = document.getElementById('bb-suggest-modal');
+        var input = document.getElementById('bb-suggest-url');
+        var submit = document.getElementById('bb-suggest-submit');
+        var status = document.getElementById('bb-suggest-status');
+        if (!openBtn || !modalEl || !input || !submit) return;
+
+        openBtn.addEventListener('click', function () {
+            input.value = '';
+            input.disabled = false;
+            submit.disabled = false;
+            submit.textContent = 'Submit';
+            status.innerHTML = '';
+            if (window.bootstrap && bootstrap.Modal) {
+                bootstrap.Modal.getOrCreateInstance(modalEl).show();
+                setTimeout(function () { input.focus(); }, 200);
+            }
+        });
+
+        submit.addEventListener('click', function () {
+            var url = input.value.trim();
+            if (!url) {
+                status.innerHTML = '<div class="alert alert-warning py-2 mb-2">Please enter a URL.</div>';
+                return;
+            }
+            submit.disabled = true;
+            input.disabled = true;
+            submit.textContent = 'Submitting…';
+            status.innerHTML = '';
+            fetch('/api/suggest-source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            }).then(function (r) {
+                if (r.ok) return r.json().then(function () {
+                    status.innerHTML = '<div class="alert alert-success py-2 mb-2">Thanks — we\'ll take a look.</div>';
+                    setTimeout(function () {
+                        if (window.bootstrap && bootstrap.Modal) {
+                            bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+                        }
+                    }, 1500);
+                });
+                return r.json().then(function (data) {
+                    status.innerHTML = '<div class="alert alert-warning py-2 mb-2">' + (data.error || 'Could not submit.') + '</div>';
+                    submit.disabled = false;
+                    input.disabled = false;
+                    submit.textContent = 'Submit';
+                });
+            }).catch(function () {
+                status.innerHTML = '<div class="alert alert-warning py-2 mb-2">Network error — try again later.</div>';
+                submit.disabled = false;
+                input.disabled = false;
+                submit.textContent = 'Submit';
+            });
+        });
+
+        // Submit-on-Enter convenience.
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); submit.click(); }
+        });
+    })();
+    </script>
 
     @await RenderSectionAsync("Scripts", required: false)
 </body>

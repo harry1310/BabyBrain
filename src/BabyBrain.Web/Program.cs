@@ -307,7 +307,48 @@ app.MapPost("/Admin/api/mark-fixed", async (
     return Results.Json(new { cleared = true });
 });
 
+// Public — accept a user-suggested new source URL. Validation is intentionally
+// lenient: must parse as an absolute http(s) URL, capped to the column's
+// 500-char limit. Duplicates are allowed; Admin can dedupe by eye when reviewing.
+app.MapPost("/api/suggest-source", async (
+    SuggestSourceRequest req,
+    BabyBrainDbContext db,
+    CancellationToken ct) =>
+{
+    var raw = req.Url?.Trim() ?? "";
+    if (raw.Length == 0 || raw.Length > 500)
+        return Results.BadRequest(new { error = "URL must be 1-500 characters" });
+    if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) ||
+        (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+    {
+        return Results.BadRequest(new { error = "Must be a full http(s) URL" });
+    }
+
+    db.SourceSuggestions.Add(new SourceSuggestion
+    {
+        Url = uri.ToString(),
+        SubmittedAt = DateTimeOffset.UtcNow,
+    });
+    await db.SaveChangesAsync(ct);
+    return Results.Json(new { submitted = true });
+});
+
+// Admin-only — clear a suggestion's pending state (kept for history; not deleted).
+app.MapPost("/Admin/api/mark-suggestion-reviewed", async (
+    MarkSuggestionRequest req,
+    BabyBrainDbContext db,
+    CancellationToken ct) =>
+{
+    var row = await db.SourceSuggestions.FirstOrDefaultAsync(s => s.Id == req.Id, ct);
+    if (row is null) return Results.NotFound();
+    row.ReviewedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync(ct);
+    return Results.Json(new { reviewed = true });
+});
+
 app.Run();
 
 public sealed record RerunSourceRequest(string Source);
 public sealed record ReportEventRequest(string ExternalKey);
+public sealed record SuggestSourceRequest(string? Url);
+public sealed record MarkSuggestionRequest(int Id);

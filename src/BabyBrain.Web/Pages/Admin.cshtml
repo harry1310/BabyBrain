@@ -158,6 +158,47 @@ else
     </table>
 }
 
+<h2 class="mt-5">Pending source suggestions</h2>
+<p class="text-muted small">
+    Submitted via the footer's <strong>Suggest a source</strong> link.
+    Click <strong>Mark reviewed</strong> once you've decided whether to add a scraper —
+    the row stays in the DB for audit, just disappears from this list.
+</p>
+
+@if (Model.PendingSuggestions.Count == 0)
+{
+    <p class="text-muted fst-italic">Nothing pending.</p>
+}
+else
+{
+    <table class="table table-sm align-middle" id="bb-suggestions-table">
+        <thead>
+            <tr>
+                <th>Submitted</th>
+                <th>URL</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var s in Model.PendingSuggestions)
+        {
+            <tr data-suggestion-row="@s.Id">
+                <td class="small text-muted">@s.SubmittedAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                <td class="text-break"><a href="@s.Url" target="_blank" rel="noopener">@s.Url</a></td>
+                <td class="text-end">
+                    <button type="button"
+                            class="btn btn-sm btn-outline-success bb-mark-suggestion-btn"
+                            data-suggestion-id="@s.Id"
+                            title="Clear from the pending list">
+                        Mark reviewed
+                    </button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
 <h2 class="mt-5">Database</h2>
 <dl>
     <dt>Total event occurrences</dt><dd>@Model.TotalEvents</dd>
@@ -245,6 +286,38 @@ else
           .catch(function (err) {
               btn.disabled = false;
               btn.textContent = 'Mark fixed';
+              alert('Failed to clear: ' + err.message);
+          });
+    });
+
+    // Mark a source suggestion as reviewed: clear the row in place.
+    document.body.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('.bb-mark-suggestion-btn');
+        if (!btn) return;
+        ev.preventDefault();
+        var id = btn.getAttribute('data-suggestion-id');
+        if (!id) return;
+        btn.disabled = true;
+        btn.textContent = 'Clearing…';
+        fetch('/Admin/api/mark-suggestion-reviewed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(id, 10) })
+        }).then(parseJson)
+          .then(function () {
+              var row = document.querySelector('[data-suggestion-row="' + id + '"]');
+              if (row) row.remove();
+              var table = document.getElementById('bb-suggestions-table');
+              if (table && !table.querySelector('tbody tr')) {
+                  var p = document.createElement('p');
+                  p.className = 'text-muted fst-italic';
+                  p.textContent = 'Nothing pending.';
+                  table.parentNode.replaceChild(p, table);
+              }
+          })
+          .catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Mark reviewed';
               alert('Failed to clear: ' + err.message);
           });
     });

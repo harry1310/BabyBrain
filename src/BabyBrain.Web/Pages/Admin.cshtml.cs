@@ -29,13 +29,23 @@ public class AdminModel : PageModel
     public IReadOnlyList<SourceHistory> History { get; private set; } = Array.Empty<SourceHistory>();
     public IReadOnlyCollection<string> RunningSources { get; private set; } = Array.Empty<string>();
     public IReadOnlyList<EventOccurrence> Reported { get; private set; } = Array.Empty<EventOccurrence>();
+    public IReadOnlyList<SourceSuggestion> PendingSuggestions { get; private set; } = Array.Empty<SourceSuggestion>();
 
     public async Task OnGetAsync()
     {
         await LoadStatsAsync();
         await LoadHistoryAsync();
         await LoadReportedAsync();
+        await LoadSuggestionsAsync();
         RunningSources = _statusTracker.RunningSources;
+    }
+
+    private async Task LoadSuggestionsAsync()
+    {
+        PendingSuggestions = await _db.SourceSuggestions
+            .Where(s => s.ReviewedAt == null)
+            .OrderByDescending(s => s.SubmittedAt)
+            .ToListAsync();
     }
 
     private async Task LoadReportedAsync()
