@@ -52,6 +52,36 @@ builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 builder.Services.AddScoped<ScrapeRunner>();
 
+// Alerting: when BABYBRAIN_GH_TOKEN + BABYBRAIN_GH_REPO are set (e.g.
+// "harry1310/BabyBrain"), failing scrapes open a GitHub issue and recovering
+// scrapes close it. Otherwise alerting is a no-op so dev/local runs don't
+// need the token.
+const string GhClientName = "github-alerts";
+var ghToken = builder.Configuration["BABYBRAIN_GH_TOKEN"];
+var ghRepo = builder.Configuration["BABYBRAIN_GH_REPO"];
+if (!string.IsNullOrWhiteSpace(ghToken) && !string.IsNullOrWhiteSpace(ghRepo) && ghRepo.Contains('/'))
+{
+    var parts = ghRepo.Split('/', 2);
+    var owner = parts[0];
+    var repo = parts[1];
+    builder.Services.AddHttpClient(GhClientName, c =>
+    {
+        c.BaseAddress = new Uri("https://api.github.com/");
+        c.Timeout = TimeSpan.FromSeconds(10);
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("BabyBrain-ScrapeAlerts/1.0");
+        c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        c.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ghToken);
+        c.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+    });
+    builder.Services.AddScoped<IScrapeAlertSink>(sp => new GitHubScrapeAlertSink(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
+        owner, repo, sp.GetRequiredService<ILogger<GitHubScrapeAlertSink>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IScrapeAlertSink, NoopScrapeAlertSink>();
+}
+
 // HTML archive: enabled only when BABYBRAIN_HTML_ARCHIVE_PATH is set. Saved
 // pages are useful for debugging failed scrapes and for any future programmatic
 // remediation flow. Production default in docker-compose is /data/scrape-html.

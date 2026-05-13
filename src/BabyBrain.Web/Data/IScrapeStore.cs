@@ -15,4 +15,8 @@ public interface IScrapeStore
 
     // Record one per-scraper run for the Admin history view.
     Task RecordRunAsync(ScrapeRun run, CancellationToken ct = default);
+
+    // Most-recent-first slice of past runs for a source. Used by ScrapeRunner
+    // to detect failure streaks for the alerting hook.
+    Task<IReadOnlyList<ScrapeRun>> GetRecentRunsAsync(string sourceId, int take, CancellationToken ct = default);
 }

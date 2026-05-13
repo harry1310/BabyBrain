@@ -9,16 +9,22 @@ public sealed class ScrapeRunner
     // (useful for both human debugging and any future programmatic remediation).
     private const int ErrorMaxLength = 4000;
 
+    // How far back we look to gauge "consecutive failures" and "was-broken-now-fixed".
+    // 7 is enough for daily scrapes to see a week of context.
+    private const int AlertHistoryWindow = 7;
+
     private readonly IScrapeStore _store;
     private readonly IEnumerable<IScraper> _scrapers;
     private readonly GeocodingService _geocoder;
+    private readonly IScrapeAlertSink _alertSink;
     private readonly ILogger<ScrapeRunner> _logger;
 
-    public ScrapeRunner(IScrapeStore store, IEnumerable<IScraper> scrapers, GeocodingService geocoder, ILogger<ScrapeRunner> logger)
+    public ScrapeRunner(IScrapeStore store, IEnumerable<IScraper> scrapers, GeocodingService geocoder, IScrapeAlertSink alertSink, ILogger<ScrapeRunner> logger)
     {
         _store = store;
         _scrapers = scrapers;
         _geocoder = geocoder;
+        _alertSink = alertSink;
         _logger = logger;
     }
 
@@ -74,6 +80,7 @@ public sealed class ScrapeRunner
             }, ct);
 
             _logger.LogInformation("Scraped {Source}: {Count} rows", scraper.SourceId, rows.Count);
+            await NotifyAlertSinkAsync(scraper.SourceId, success: true, error: null, ct);
             return new ScraperOutcome(scraper.SourceId, true, rows.Count, null, completedAt);
         }
         catch (OperationCanceledException) { throw; }
@@ -102,7 +109,43 @@ public sealed class ScrapeRunner
                 _logger.LogError(saveEx, "Failed to record ScrapeRun for {Source}", scraper.SourceId);
             }
 
+            await NotifyAlertSinkAsync(scraper.SourceId, success: false, error: detail, ct);
             return new ScraperOutcome(scraper.SourceId, false, 0, detail, completedAt);
+        }
+    }
+
+    // Reads the just-recorded run plus its predecessors to decide whether this
+    // scrape represents a streak entering alert territory or a fresh recovery.
+    // Alerting failures are swallowed — they must never break the scrape.
+    private async Task NotifyAlertSinkAsync(string sourceId, bool success, string? error, CancellationToken ct)
+    {
+        try
+        {
+            var history = await _store.GetRecentRunsAsync(sourceId, AlertHistoryWindow, ct);
+            if (success)
+            {
+                // Newest-first: [0] is the current success. Fire recovery only if
+                // the immediately previous run was a failure — otherwise we'd
+                // re-alert on every subsequent success.
+                if (history.Count > 1 && history[1].Status == ScrapeRun.StatusFailed)
+                {
+                    await _alertSink.OnRecoveryAsync(sourceId, ct);
+                }
+            }
+            else
+            {
+                var streak = 0;
+                foreach (var r in history)
+                {
+                    if (r.Status != ScrapeRun.StatusFailed) break;
+                    streak++;
+                }
+                await _alertSink.OnFailureAsync(sourceId, error ?? "(no error captured)", streak, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Alert sink notification failed for {Source}", sourceId);
         }
     }
 

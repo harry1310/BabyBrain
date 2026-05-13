@@ -1,4 +1,5 @@
 using BabyBrain.Scrapers.Domain;
+using Microsoft.EntityFrameworkCore;
 
 namespace BabyBrain.Web.Data;
 
@@ -15,5 +16,14 @@ public sealed class EfScrapeStore : IScrapeStore
     {
         _db.ScrapeRuns.Add(run);
         await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<ScrapeRun>> GetRecentRunsAsync(string sourceId, int take, CancellationToken ct = default)
+    {
+        return await _db.ScrapeRuns
+            .Where(r => r.Source == sourceId)
+            .OrderByDescending(r => r.StartedAt)
+            .Take(take)
+            .ToListAsync(ct);
     }
 }
