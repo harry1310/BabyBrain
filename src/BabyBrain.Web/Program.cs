@@ -1,4 +1,5 @@
 using BabyBrain.Scrapers;
+using BabyBrain.Scrapers.Barbican;
 using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
 using BabyBrain.Scrapers.Islington;
@@ -150,6 +151,16 @@ builder.Services.AddHttpClient<WigmoreHallUnderFivesScraper>(c =>
         "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<WigmoreHallUnderFivesScraper>());
+
+// Barbican is also server-rendered HTML behind CF — same UA pattern, follows
+// each event's detail page for the standard ticket price.
+builder.Services.AddHttpClient<BarbicanParentAndBabyScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<BarbicanParentAndBabyScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
