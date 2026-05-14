@@ -140,7 +140,17 @@ builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
 builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
 builder.Services.AddScoped<IScraper, BritishMuseumScraper>();
 builder.Services.AddScoped<IScraper, SouthbankCentreScraper>();
-builder.Services.AddScoped<IScraper, VaEarlyYearsScraper>();
+// V&A: Playwright fetches the listing, but when a listing card has no
+// itemprop="description" we fall back to a plain HttpClient GET of the
+// detail page just for its <meta name="description"> — much faster than
+// rendering a second time with Playwright.
+builder.Services.AddHttpClient<VaEarlyYearsScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<VaEarlyYearsScraper>());
 
 // Wigmore needs a browser-shaped UA (CloudFront 403s on the bare default).
 // 30s timeout because we follow each listing item to its detail page for price.

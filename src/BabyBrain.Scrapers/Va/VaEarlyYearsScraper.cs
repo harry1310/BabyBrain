@@ -28,8 +28,13 @@ public sealed class VaEarlyYearsScraper : IScraper
     public string Category => Categories.Museum;
 
     private readonly PlaywrightFetcher _fetcher;
+    private readonly HttpClient _http;
 
-    public VaEarlyYearsScraper(PlaywrightFetcher fetcher) => _fetcher = fetcher;
+    public VaEarlyYearsScraper(PlaywrightFetcher fetcher, HttpClient http)
+    {
+        _fetcher = fetcher;
+        _http = http;
+    }
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
@@ -56,21 +61,21 @@ public sealed class VaEarlyYearsScraper : IScraper
             if (!tokens.Contains("early-years")) continue;
             if (tokens.Contains("schools") && !tokens.Contains("families")) continue;
 
-            rows.AddRange(BuildRows(li, today, horizonEnd, now));
+            rows.AddRange(await BuildRowsAsync(li, today, horizonEnd, now, ct));
         }
         return rows;
     }
 
-    private IEnumerable<EventOccurrence> BuildRows(IElement li, DateOnly from, DateOnly to, DateTimeOffset now)
+    private async Task<IReadOnlyList<EventOccurrence>> BuildRowsAsync(IElement li, DateOnly from, DateOnly to, DateTimeOffset now, CancellationToken ct)
     {
         var article = li.QuerySelector("article[itemtype='http://schema.org/Event']");
-        if (article is null) yield break;
+        if (article is null) return Array.Empty<EventOccurrence>();
 
         var name = article.QuerySelector("meta[itemprop='name']")?.GetAttribute("content")?.Trim() ?? "";
         var startRaw = article.QuerySelector("meta[itemprop='startDate']")?.GetAttribute("content")?.Trim();
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) yield break;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) return Array.Empty<EventOccurrence>();
 
-        if (!TryParseDateTime(startRaw, out var start)) yield break;
+        if (!TryParseDateTime(startRaw, out var start)) return Array.Empty<EventOccurrence>();
         var seriesFirst = DateOnly.FromDateTime(start.LocalDateTime);
         var startTime = TimeOnly.FromDateTime(start.LocalDateTime);
 
@@ -86,7 +91,7 @@ public sealed class VaEarlyYearsScraper : IScraper
         }
 
         // Drop the card entirely if the whole series sits outside the horizon.
-        if (seriesLast < from || seriesFirst > to) yield break;
+        if (seriesLast < from || seriesFirst > to) return Array.Empty<EventOccurrence>();
 
         var windowStart = seriesFirst < from ? from : seriesFirst;
         var windowEnd = seriesLast > to ? to : seriesLast;
@@ -98,6 +103,20 @@ public sealed class VaEarlyYearsScraper : IScraper
         var url = href.StartsWith("http") ? href : Origin + href;
         var eventId = ExtractEventId(href);
 
+        // Some listing cards omit the description meta entirely (e.g. Rhythm Makers
+        // n3zEzkz33J7), leaving us with nothing to parse age from. Fall back to the
+        // detail page's <meta name="description"> which V&A populates more reliably
+        // ("Free, informal session for families with children aged 2-5"). Only fire
+        // when listing parse came up empty — most cards have what we need locally.
+        if (minAge is null && maxAge is null && !string.IsNullOrEmpty(url))
+        {
+            var detailDesc = await TryFetchDetailDescriptionAsync(url, ct);
+            if (!string.IsNullOrEmpty(detailDesc))
+            {
+                (minAge, maxAge) = TextParsing.ParseAgeRange(name + " " + detailDesc);
+            }
+        }
+
         var venue = ResolveVenue(li.GetAttribute("data-wo-venue"));
         var notes = string.IsNullOrEmpty(description) ? null : Truncate(description, 400);
 
@@ -107,9 +126,10 @@ public sealed class VaEarlyYearsScraper : IScraper
             ? new[] { seriesFirst }.Where(d => d >= windowStart && d <= windowEnd)
             : TextParsing.WeeklyDatesInWindow(seriesFirst.DayOfWeek, windowStart, windowEnd);
 
+        var rows = new List<EventOccurrence>();
         foreach (var date in dates)
         {
-            yield return new EventOccurrence
+            rows.Add(new EventOccurrence
             {
                 ExternalKey = $"{SourceId}:{eventId}:{date:yyyy-MM-dd}:{startTime:HHmm}",
                 Source = SourceId,
@@ -128,7 +148,25 @@ public sealed class VaEarlyYearsScraper : IScraper
                 TermTimeOnly = false,
                 IsFree = true,
                 LastSeenAt = now,
-            };
+            });
+        }
+        return rows;
+    }
+
+    private async Task<string?> TryFetchDetailDescriptionAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            var html = await _http.GetStringAsync(url, ct);
+            // Lightweight regex parse — we just want the meta description content
+            // (a short marketing string). Pulling AngleSharp in for one element
+            // would more than double the work per detail page.
+            var m = Regex.Match(html, @"<meta\s+name=""description""\s+content=""([^""]*)""", RegexOptions.IgnoreCase);
+            return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
