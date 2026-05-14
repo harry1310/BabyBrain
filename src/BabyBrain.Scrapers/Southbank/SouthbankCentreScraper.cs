@@ -81,6 +81,7 @@ public sealed class SouthbankCentreScraper : IScraper
     {
         var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Title + " " + teaser.Summary);
         var isFree = DetectFree(detail);
+        var notes = ExtractDescription(detail) ?? (teaser.Summary.Length > 0 ? teaser.Summary : null);
 
         // Canonical performance list is the .smaller-p paragraph inside the
         // override block. Each <br>-separated line is one performance.
@@ -109,7 +110,7 @@ public sealed class SouthbankCentreScraper : IScraper
                 StartTime = parsed.StartTime,
                 EndTime = null,
                 SessionName = teaser.Title,
-                SessionNotes = teaser.Summary.Length > 0 ? teaser.Summary : null,
+                SessionNotes = notes,
                 VenueName = parsed.Venue,
                 VenueAddress = "Belvedere Road, London",
                 Postcode = Postcode,
@@ -134,6 +135,20 @@ public sealed class SouthbankCentreScraper : IScraper
         var (isFree, _) = TextParsing.ParsePrice(booking.TextContent);
         return isFree;
     }
+
+    // The actual marketing copy lives in .c-event-masthead__intro on the detail
+    // page (a single <p> usually). Earlier versions used .c-event-card__listing-details
+    // from the hub-page teaser, which is listing-metadata badges rather than prose.
+    // Returns null if the block isn't present so the caller can fall back.
+    private static string? ExtractDescription(IDocument detail)
+    {
+        var intro = detail.QuerySelector(".c-event-masthead__intro")?.TextContent?.Trim();
+        if (string.IsNullOrEmpty(intro)) return null;
+        var collapsed = Regex.Replace(intro, @"\s+", " ").Trim();
+        return Truncate(collapsed, 400);
+    }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max].TrimEnd() + "…";
 
     private record ParsedLine(DateOnly Date, TimeOnly StartTime, string Venue);
 
