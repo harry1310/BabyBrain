@@ -80,6 +80,7 @@ public sealed class SouthbankCentreScraper : IScraper
     private IEnumerable<EventOccurrence> BuildOccurrences(IDocument detail, Teaser teaser, DateOnly from, DateOnly to, DateTimeOffset now)
     {
         var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Title + " " + teaser.Summary);
+        var isFree = DetectFree(detail);
 
         // Canonical performance list is the .smaller-p paragraph inside the
         // override block. Each <br>-separated line is one performance.
@@ -115,9 +116,23 @@ public sealed class SouthbankCentreScraper : IScraper
                 MinAgeMonths = minAge,
                 MaxAgeMonths = maxAge,
                 TermTimeOnly = false,
+                IsFree = isFree,
                 LastSeenAt = now,
             };
         }
+    }
+
+    // Southbank renders free events as a disabled "Free – no ticket required"
+    // pill inside the event masthead's booking block, identified by the class
+    // c-btn--free-no-ticket. Fall back to "Free" text matching in case the
+    // class name shifts but the wording stays.
+    private static bool DetectFree(IDocument detail)
+    {
+        var booking = detail.QuerySelector(".c-event-masthead__event-booking");
+        if (booking is null) return false;
+        if (booking.QuerySelector(".c-btn--free-no-ticket") is not null) return true;
+        var (isFree, _) = TextParsing.ParsePrice(booking.TextContent);
+        return isFree;
     }
 
     private record ParsedLine(DateOnly Date, TimeOnly StartTime, string Venue);
