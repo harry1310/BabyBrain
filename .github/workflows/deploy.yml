@@ -1,0 +1,33 @@
+name: Deploy
+
+# Auto-deploy on every push to main. workflow_dispatch lets us re-deploy the
+# current main without a fresh commit (Actions tab → Deploy → Run workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialise deploys. If two commits land back-to-back, the second one waits
+# for the first to finish rather than racing the docker build.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: SSH and run deploy script
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          # authorized_keys forces command=/opt/babybrain/deploy.sh, so the
+          # `script:` value below is ignored on the server — but we set it
+          # to the same thing for clarity in the logs. request_pty must be
+          # false because the deploy key is locked down with no-pty.
+          request_pty: false
+          command_timeout: 10m
+          script: /opt/babybrain/deploy.sh
