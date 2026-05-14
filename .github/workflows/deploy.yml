@@ -1,11 +1,17 @@
 name: Deploy
 
-# Auto-deploy on every push to main. workflow_dispatch lets us re-deploy the
-# current main without a fresh commit (Actions tab → Deploy → Run workflow).
+# Auto-deploy on every push to main. workflow_dispatch also exposes per-deploy
+# env-var overrides: add a new input below, append a `KEY=${{ inputs.x }}` line
+# to the `script:` template, and that's it — no box visits needed thereafter.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      scrape_on_startup:
+        description: 'Run scrape immediately after deploy'
+        type: boolean
+        default: false
 
 # Serialise deploys. If two commits land back-to-back, the second one waits
 # for the first to finish rather than racing the docker build.
@@ -24,10 +30,14 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          # authorized_keys forces command=/opt/babybrain/deploy.sh, so the
-          # `script:` value below is ignored on the server — but we set it
-          # to the same thing for clarity in the logs. request_pty must be
-          # false because the deploy key is locked down with no-pty.
+          # authorized_keys forces command=/opt/babybrain/scripts/deploy.sh,
+          # but the script value below is preserved in $SSH_ORIGINAL_COMMAND.
+          # deploy.sh parses any KEY=VALUE tokens from there and writes them
+          # to .env.deploy-override, which docker-compose loads as an env_file
+          # on top of .env. Adding a new override variable = one line below
+          # plus one input declaration above.
           request_pty: false
           command_timeout: 10m
-          script: /opt/babybrain/deploy.sh
+          script: |
+            /opt/babybrain/scripts/deploy.sh \
+              BABYBRAIN_SCRAPE_ON_STARTUP=${{ inputs.scrape_on_startup || 'false' }}
