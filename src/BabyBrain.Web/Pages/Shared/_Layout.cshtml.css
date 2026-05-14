@@ -40,9 +40,13 @@ button.accept-policy {
 }
 
 .footer {
-  position: absolute;
-  bottom: 0;
+  /* Was: position:absolute, bottom:0, line-height:60px, white-space:nowrap.
+     Those caused the bottom event card to overlap the footer on mobile
+     (the absolute footer is out of flow so content has no idea it's there)
+     and produced a ~60px vertical gap between the wrapped footer lines.
+     Letting the footer flow normally with a small vertical padding fixes
+     both. The wider container has its own flex+wrap behaviour. */
   width: 100%;
-  white-space: nowrap;
-  line-height: 60px;
+  padding: 1rem 0;
+  margin-top: 2rem;
 }

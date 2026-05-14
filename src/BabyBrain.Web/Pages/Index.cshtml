@@ -405,6 +405,8 @@ else
                     if (!btn) return;
                     var key = btn.getAttribute('data-event-key');
                     if (!key) return;
+                    var title = btn.getAttribute('data-event-title') || '';
+                    var venue = btn.getAttribute('data-event-venue') || '';
                     var confirmBtn = document.getElementById('bb-report-confirm');
                     var body = document.getElementById('bb-report-modal-body');
                     if (confirmBtn) {
@@ -413,7 +415,16 @@ else
                         confirmBtn.textContent = 'Report';
                     }
                     if (body) {
-                        body.innerHTML = "Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.";
+                        // Build the descriptor: "Title at Venue", or fall back to either
+                        // alone if one is missing. Both are user-visible content from
+                        // scraped sources, so always escape.
+                        var descriptor = (title && venue) ? (esc(title) + ' at ' + esc(venue))
+                                       : title ? esc(title)
+                                       : venue ? esc(venue)
+                                       : 'this event';
+                        body.innerHTML = "Click <strong>Report</strong> to tell babybrain.uk that the event details for <strong>" +
+                                         descriptor +
+                                         "</strong> don't match the source event.";
                     }
                     var modalEl = document.getElementById('bb-report-modal');
                     if (modalEl && window.bootstrap && bootstrap.Modal) {

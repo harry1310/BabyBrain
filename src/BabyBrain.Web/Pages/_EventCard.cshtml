@@ -38,7 +38,10 @@
                     <span class="mx-1">·</span>
                 }
                 <button type="button" class="btn btn-link btn-sm p-0 align-baseline text-muted bb-report-btn"
-                        data-event-key="@Model.ExternalKey" style="font-size:inherit; text-decoration:none;">
+                        data-event-key="@Model.ExternalKey"
+                        data-event-title="@Model.SessionName"
+                        data-event-venue="@Model.VenueName"
+                        style="font-size:inherit; text-decoration:none;">
                     Report mistake
                 </button>
             </div>
