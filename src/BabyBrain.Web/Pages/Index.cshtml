@@ -408,13 +408,18 @@ else
                     var title = btn.getAttribute('data-event-title') || '';
                     var venue = btn.getAttribute('data-event-venue') || '';
                     var confirmBtn = document.getElementById('bb-report-confirm');
-                    var body = document.getElementById('bb-report-modal-body');
+                    var msg = document.getElementById('bb-report-modal-message');
+                    var fieldSelect = document.getElementById('bb-report-field');
                     if (confirmBtn) {
                         confirmBtn.setAttribute('data-event-key', key);
-                        confirmBtn.disabled = false;
+                        confirmBtn.disabled = true; // re-enabled once user picks a field
                         confirmBtn.textContent = 'Report';
+                        confirmBtn.style.display = '';
                     }
-                    if (body) {
+                    if (fieldSelect) {
+                        fieldSelect.value = ''; // reset to placeholder on every open
+                    }
+                    if (msg) {
                         // Build the descriptor: "Title at Venue", or fall back to either
                         // alone if one is missing. Both are user-visible content from
                         // scraped sources, so always escape.
@@ -422,13 +427,21 @@ else
                                        : title ? esc(title)
                                        : venue ? esc(venue)
                                        : 'this event';
-                        body.innerHTML = "Click <strong>Report</strong> to tell babybrain.uk that the event details for <strong>" +
-                                         descriptor +
-                                         "</strong> don't match the source event.";
+                        msg.innerHTML = "Tell babybrain.uk that the event details for <strong>" +
+                                        descriptor +
+                                        "</strong> don't match the source event.";
                     }
                     var modalEl = document.getElementById('bb-report-modal');
                     if (modalEl && window.bootstrap && bootstrap.Modal) {
                         bootstrap.Modal.getOrCreateInstance(modalEl).show();
+                    }
+                });
+
+                // Gate the Report button on a non-empty dropdown selection.
+                document.body.addEventListener('change', function (ev) {
+                    if (ev.target && ev.target.id === 'bb-report-field') {
+                        var confirmBtn = document.getElementById('bb-report-confirm');
+                        if (confirmBtn) confirmBtn.disabled = !ev.target.value;
                     }
                 });
 
@@ -437,28 +450,33 @@ else
                     if (!btn) return;
                     var key = btn.getAttribute('data-event-key');
                     if (!key) return;
+                    var fieldSelect = document.getElementById('bb-report-field');
+                    var field = fieldSelect ? fieldSelect.value : '';
+                    if (!field) return; // dropdown gate failed; do nothing
                     btn.disabled = true;
                     btn.textContent = 'Reporting…';
                     fetch('/api/report-event', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ externalKey: key })
+                        body: JSON.stringify({ externalKey: key, reportedField: field })
                     }).then(function (r) {
-                        var body = document.getElementById('bb-report-modal-body');
+                        var msg = document.getElementById('bb-report-modal-message');
                         var modalEl = document.getElementById('bb-report-modal');
                         if (!r.ok) {
-                            if (body) body.innerHTML = '<div class="alert alert-warning mb-0">Sorry, that didn\'t go through. Try again later.</div>';
+                            if (msg) msg.innerHTML = '<div class="alert alert-warning mb-0">Sorry, that didn\'t go through. Try again later.</div>';
                             btn.disabled = false;
                             btn.textContent = 'Report';
                             return;
                         }
-                        if (body) body.innerHTML = '<div class="alert alert-success mb-0">Reported — thanks. We\'ll take a look.</div>';
+                        if (msg) msg.innerHTML = '<div class="alert alert-success mb-0">Reported — thanks. We\'ll take a look.</div>';
                         btn.style.display = 'none';
+                        if (fieldSelect) fieldSelect.disabled = true;
                         setTimeout(function () {
                             if (modalEl && window.bootstrap && bootstrap.Modal) {
                                 bootstrap.Modal.getOrCreateInstance(modalEl).hide();
                             }
                             btn.style.display = '';
+                            if (fieldSelect) fieldSelect.disabled = false;
                         }, 1500);
                     }).catch(function () {
                         btn.disabled = false;
@@ -533,12 +551,25 @@ else
                 <h5 class="modal-title" id="bb-report-modal-title">Report a mistake</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body" id="bb-report-modal-body">
-                Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.
+            <div class="modal-body">
+                <p id="bb-report-modal-message" class="mb-3">
+                    Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.
+                </p>
+                <label for="bb-report-field" class="form-label small mb-1">What's wrong?</label>
+                <select id="bb-report-field" class="form-select form-select-sm" required>
+                    <option value="" selected disabled>Select what's wrong…</option>
+                    <option value="age_range">Age range</option>
+                    <option value="time">Time</option>
+                    <option value="date">Date</option>
+                    <option value="location">Location</option>
+                    <option value="cost">Cost</option>
+                    <option value="title">Title</option>
+                    <option value="not_running">Event isn't running anymore</option>
+                </select>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="bb-report-confirm">Report</button>
+                <button type="button" class="btn btn-danger" id="bb-report-confirm" disabled>Report</button>
             </div>
         </div>
     </div>

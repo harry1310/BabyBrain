@@ -46,4 +46,9 @@ public class EventOccurrence
     // details as wrong. Cleared by Admin's "Mark fixed". MUST be preserved
     // across scrape upserts — the scraper never writes this field.
     public DateTimeOffset? ReportedAt { get; set; }
+
+    // Which detail the reporter flagged — token from ReportedFields (age_range,
+    // time, date, location, cost, title, not_running). Set/cleared in lock-step
+    // with ReportedAt. Also preserved across scrape upserts.
+    public string? ReportedField { get; set; }
 }

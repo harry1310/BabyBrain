@@ -283,7 +283,8 @@ app.MapGet("/Admin/api/source-status", (IScrapeStatusTracker tracker) =>
     Results.Json(new { running = tracker.RunningSources }));
 
 // Public "report a mistake" endpoint — fired by the dialog on every event
-// card. Idempotent; re-reporting just updates the timestamp.
+// card. Idempotent; re-reporting just updates the timestamp + field. The
+// reportedField is required and must be one of the known tokens.
 app.MapPost("/api/report-event", async (
     ReportEventRequest req,
     BabyBrainDbContext db,
@@ -291,11 +292,14 @@ app.MapPost("/api/report-event", async (
 {
     if (string.IsNullOrWhiteSpace(req.ExternalKey))
         return Results.BadRequest(new { error = "externalKey required" });
+    if (!ReportedFields.IsValid(req.ReportedField))
+        return Results.BadRequest(new { error = "reportedField must be one of the known tokens" });
 
     var row = await db.EventOccurrences.FirstOrDefaultAsync(e => e.ExternalKey == req.ExternalKey, ct);
     if (row is null) return Results.NotFound();
 
     row.ReportedAt = DateTimeOffset.UtcNow;
+    row.ReportedField = req.ReportedField;
     await db.SaveChangesAsync(ct);
     return Results.Json(new { reported = true });
 });
@@ -313,6 +317,7 @@ app.MapPost("/Admin/api/mark-fixed", async (
     if (row is null) return Results.NotFound();
 
     row.ReportedAt = null;
+    row.ReportedField = null;
     await db.SaveChangesAsync(ct);
     return Results.Json(new { cleared = true });
 });
@@ -359,6 +364,6 @@ app.MapPost("/Admin/api/mark-suggestion-reviewed", async (
 app.Run();
 
 public sealed record RerunSourceRequest(string Source);
-public sealed record ReportEventRequest(string ExternalKey);
+public sealed record ReportEventRequest(string ExternalKey, string? ReportedField);
 public sealed record SuggestSourceRequest(string? Url);
 public sealed record MarkSuggestionRequest(int Id);

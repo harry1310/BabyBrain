@@ -123,6 +123,7 @@ else
         <thead>
             <tr>
                 <th>Reported</th>
+                <th>What's wrong</th>
                 <th>Event</th>
                 <th>Source</th>
                 <th>When</th>
@@ -134,6 +135,7 @@ else
         {
             <tr data-reported-row="@ev.ExternalKey">
                 <td class="small text-muted">@ev.ReportedAt?.UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                <td><span class="badge text-bg-warning text-dark">@ReportedFields.Label(ev.ReportedField)</span></td>
                 <td>
                     <div>@ev.SessionName</div>
                     <div class="small text-muted">@ev.VenueName@(string.IsNullOrEmpty(ev.Postcode) ? "" : $" · {ev.Postcode}")</div>
