@@ -2,7 +2,9 @@ using BabyBrain.Scrapers;
 using BabyBrain.Scrapers.Barbican;
 using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
+using BabyBrain.Scrapers.DesignMuseum;
 using BabyBrain.Scrapers.Islington;
+using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
@@ -86,6 +88,11 @@ if (!string.IsNullOrWhiteSpace(ghToken) && !string.IsNullOrWhiteSpace(ghRepo) &&
         c.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     });
 
+    // Shared GitHub Issues client — used by the alert sink, the Admin
+    // "raise issue" action, and the API-fallback service.
+    builder.Services.AddScoped(sp => new GitHubIssueClient(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName), owner, repo));
+
     if (!string.IsNullOrWhiteSpace(anthropicKey))
     {
         var capturedKey = anthropicKey;
@@ -101,18 +108,19 @@ if (!string.IsNullOrWhiteSpace(ghToken) && !string.IsNullOrWhiteSpace(ghRepo) &&
             sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
             owner, repo, sp.GetRequiredService<ILogger<GitHubPatchPublisher>>()));
         builder.Services.AddScoped<SelfHealingOrchestrator>();
+
+        // 6-hour API fallback: heals `claude-fix` issues that no Claude Code
+        // console claimed in time. Only runs when the API key is present.
+        builder.Services.AddHostedService<IssueFallbackService>();
     }
     else
     {
         builder.Services.AddScoped<IClaudeHealer, NoopClaudeHealer>();
     }
 
-    builder.Services.AddScoped<IScrapeAlertSink>(sp => new GitHubScrapeAlertSink(
-        sp.GetRequiredService<IHttpClientFactory>().CreateClient(GhClientName),
-        owner, repo,
-        // Resolve orchestrator only when Anthropic is configured — registered conditionally above.
-        !string.IsNullOrWhiteSpace(anthropicKey) ? sp.GetRequiredService<SelfHealingOrchestrator>() : null,
-        sp.GetRequiredService<ILogger<GitHubScrapeAlertSink>>()));
+    // The sink only raises/closes issues now — healing is deferred to either
+    // an open console or IssueFallbackService.
+    builder.Services.AddScoped<IScrapeAlertSink, GitHubScrapeAlertSink>();
 }
 else
 {
@@ -171,6 +179,19 @@ builder.Services.AddHttpClient<BarbicanParentAndBabyScraper>(c =>
         "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<BarbicanParentAndBabyScraper>());
+
+// Design Museum: server-rendered HTML on a vanilla CMS, fine over plain HTTP.
+builder.Services.AddHttpClient<DesignMuseumFamiliesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<DesignMuseumFamiliesScraper>());
+
+// Postal Museum: single recurring "Post and Play" event page. Behind
+// Cloudflare, so it goes through Playwright rather than a plain HttpClient.
+builder.Services.AddScoped<IScraper, PostalMuseumPostAndPlayScraper>();
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
@@ -361,9 +382,72 @@ app.MapPost("/Admin/api/mark-suggestion-reviewed", async (
     return Results.Json(new { reviewed = true });
 });
 
+// Admin-only — raise a GitHub issue about a reported event. The reviewer's
+// free-text description plus the event's own details go into the issue body;
+// it lands in the same `claude-fix` queue (and identical downstream flow) as
+// scrape-failure issues.
+app.MapPost("/Admin/api/raise-issue", async (
+    RaiseIssueRequest req,
+    BabyBrainDbContext db,
+    IServiceProvider sp,
+    CancellationToken ct) =>
+{
+    var github = sp.GetService<GitHubIssueClient>();
+    if (github is null)
+        return Results.Json(new { error = "GitHub is not configured on this server." }, statusCode: 503);
+
+    if (string.IsNullOrWhiteSpace(req.ExternalKey))
+        return Results.BadRequest(new { error = "externalKey required" });
+    var description = req.Description?.Trim() ?? "";
+    if (description.Length == 0 || description.Length > 4000)
+        return Results.BadRequest(new { error = "Description must be 1-4000 characters" });
+
+    var row = await db.EventOccurrences.FirstOrDefaultAsync(e => e.ExternalKey == req.ExternalKey, ct);
+    if (row is null) return Results.NotFound();
+
+    var title = $"Reported event: {(row.SessionName.Length <= 80 ? row.SessionName : row.SessionName[..80])}";
+    var venue = row.VenueName + (string.IsNullOrEmpty(row.Postcode) ? "" : $" ({row.Postcode})");
+    var body = $$"""
+        A reviewer flagged a BabyBrain event via the Admin screen.
+
+        **Reviewer's description**
+
+        {{description}}
+
+        **Reported event**
+
+        - Title: {{row.SessionName}}
+        - Venue: {{venue}}
+        - Date / time: {{row.Date:yyyy-MM-dd}} {{row.StartTime:HH\:mm}}
+        - Source: `{{row.Source}}`
+        - Reported field: {{ReportedFields.Label(row.ReportedField)}}
+        - Source URL: {{(string.IsNullOrEmpty(row.SourceUrl) ? "(none)" : row.SourceUrl)}}
+        - ExternalKey: `{{row.ExternalKey}}`
+
+        Queued for a Claude Code fix — an open console picks it up, otherwise the API fallback runs after 6 hours.
+
+        {{IssueConventions.SourceMarker(row.Source)}}
+        """;
+
+    try
+    {
+        await IssueConventions.EnsureLabelsAsync(github, ct);
+        var created = await github.CreateIssueAsync(
+            title, body,
+            new[] { IssueConventions.ReportedMistake, IssueConventions.ClaudeFix },
+            ct);
+        return Results.Json(new { number = created?.Number, url = created?.HtmlUrl });
+    }
+    catch (Exception)
+    {
+        return Results.Json(new { error = "Failed to raise the issue on GitHub." }, statusCode: 502);
+    }
+});
+
 app.Run();
 
 public sealed record RerunSourceRequest(string Source);
 public sealed record ReportEventRequest(string ExternalKey, string? ReportedField);
 public sealed record SuggestSourceRequest(string? Url);
 public sealed record MarkSuggestionRequest(int Id);
+public sealed record RaiseIssueRequest(string ExternalKey, string? Description);

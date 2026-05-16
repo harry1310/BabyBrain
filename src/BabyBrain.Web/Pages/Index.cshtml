@@ -63,6 +63,7 @@ else
             url = x.r.SourceUrl,
             color = Categories.Color(x.r.Category),
             category = Categories.Label(x.r.Category),
+            category_id = x.r.Category,
             postcode = x.r.Postcode,
             event_key = x.r.ExternalKey,
         })
@@ -75,7 +76,7 @@ else
         .OrderBy(c => c)
         .ToList();
 
-    <p class="text-muted">@Model.Results.Count event@(Model.Results.Count == 1 ? "" : "s") found.</p>
+    <p class="text-muted" id="bb-result-count" data-total="@Model.Results.Count">@Model.Results.Count event@(Model.Results.Count == 1 ? "" : "s") found.</p>
 
     @if (legendCategories.Count > 0)
     {
@@ -83,12 +84,61 @@ else
             <span class="fw-semibold text-body">Categories:</span>
             @foreach (var cat in legendCategories)
             {
-                <span class="d-inline-flex align-items-center gap-1">
-                    <span style="display:inline-block; width:.7rem; height:.7rem; border-radius:50%; background:@Categories.Color(cat); border:1px solid rgba(0,0,0,.15);"></span>
-                    <span>@Categories.Label(cat)</span>
-                </span>
+                <button type="button" class="bb-cat-toggle d-inline-flex align-items-center gap-1 border-0 bg-transparent p-0"
+                        data-category="@cat" title="Click to hide @Categories.Label(cat) events">
+                    <span class="bb-cat-dot" style="display:inline-block; width:.7rem; height:.7rem; border-radius:50%; background:@Categories.Color(cat); border:1px solid rgba(0,0,0,.15);"></span>
+                    <span class="bb-cat-label">@Categories.Label(cat)</span>
+                </button>
             }
         </div>
+        <style>
+            .bb-cat-toggle { cursor: pointer; color: inherit; }
+            .bb-cat-toggle:hover .bb-cat-label { text-decoration: underline; }
+            .bb-cat-toggle.bb-cat-excluded .bb-cat-label { text-decoration: line-through; }
+            .bb-cat-toggle.bb-cat-excluded { opacity: .55; }
+            .bb-cat-toggle.bb-cat-excluded:hover .bb-cat-label { text-decoration: line-through; }
+        </style>
+        <script>
+            (function () {
+                var excluded = new Set();
+                var countEl = document.getElementById('bb-result-count');
+                var total = countEl ? parseInt(countEl.getAttribute('data-total'), 10) || 0 : 0;
+
+                function plural(n) { return n === 1 ? '' : 's'; }
+                function applyExclusions() {
+                    var shown = 0;
+                    document.querySelectorAll('.event-card').forEach(function (c) {
+                        var cat = c.getAttribute('data-category') || '';
+                        var hide = excluded.has(cat);
+                        c.style.display = hide ? 'none' : '';
+                        if (!hide) shown++;
+                    });
+                    if (countEl) {
+                        countEl.textContent = excluded.size === 0
+                            ? total + ' event' + plural(total) + ' found.'
+                            : shown + ' of ' + total + ' event' + plural(total) + ' shown.';
+                    }
+                    if (window.bbMapApi) window.bbMapApi.setExcluded(excluded);
+                }
+
+                document.body.addEventListener('click', function (ev) {
+                    var btn = ev.target.closest('.bb-cat-toggle');
+                    if (!btn) return;
+                    var cat = btn.getAttribute('data-category');
+                    if (!cat) return;
+                    if (excluded.has(cat)) {
+                        excluded.delete(cat);
+                        btn.classList.remove('bb-cat-excluded');
+                        btn.title = 'Click to hide ' + (btn.querySelector('.bb-cat-label')?.textContent || '') + ' events';
+                    } else {
+                        excluded.add(cat);
+                        btn.classList.add('bb-cat-excluded');
+                        btn.title = 'Click to show ' + (btn.querySelector('.bb-cat-label')?.textContent || '') + ' events';
+                    }
+                    applyExclusions();
+                });
+            })();
+        </script>
     }
 
     @if (mapPoints.Count > 0)
@@ -187,6 +237,22 @@ else
 
                 group.addTo(map);
                 map.fitBounds(group.getBounds().pad(0.15));
+
+                // Exposed for the category-filter script: when a category is
+                // toggled off, drop its markers from the feature group; toggle
+                // back on to re-add. Bounds are intentionally NOT re-fit on
+                // filter changes — that'd yank the map around mid-interaction.
+                window.bbMapApi = {
+                    setExcluded: function (excluded) {
+                        points.forEach(function (p) {
+                            var marker = markersByKey[p.event_key];
+                            if (!marker) return;
+                            var hide = excluded.has(p.category_id);
+                            if (hide) group.removeLayer(marker);
+                            else if (!group.hasLayer(marker)) group.addLayer(marker);
+                        });
+                    }
+                };
 
                 // Card → marker via event delegation on the body. Direct
                 // querySelectorAll('.event-card') ran before the cards were

@@ -1,0 +1,84 @@
+@using BabyBrain.Web.Data
+@model AdminModel
+@{
+    var runningSet = Model.RunningSources.ToHashSet();
+}
+
+<table class="table table-sm align-middle" id="bb-history-table">
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th class="text-center">Status</th>
+            <th colspan="5">Recent runs</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var h in Model.History)
+    {
+        var latest = h.Recent.FirstOrDefault();
+        var isRunning = runningSet.Contains(h.Source);
+        <tr>
+            <td><span class="font-monospace small">@h.Source</span></td>
+            <td class="text-center" data-status-cell="@h.Source">
+                @if (isRunning)
+                {
+                    <span class="spinner-border spinner-border-sm text-primary" role="status" title="Scrape running…">
+                        <span class="visually-hidden">Running…</span>
+                    </span>
+                }
+                else if (latest is null)
+                {
+                    <span class="text-muted" title="No runs yet">—</span>
+                }
+                else if (latest.Status == ScrapeRun.StatusFailed)
+                {
+                    <span class="text-danger fs-4" title="Last run failed">✗</span>
+                }
+                else if (AdminModel.IsDrop(h.Recent, 0))
+                {
+                    <span class="text-warning fs-4" title="Last run succeeded, but row count is ≤50% of the prior successful run">⚠</span>
+                }
+                else
+                {
+                    <span class="text-success fs-4" title="Last run succeeded">✓</span>
+                }
+            </td>
+            @for (var i = 0; i < 5; i++)
+            {
+                if (i < h.Recent.Count)
+                {
+                    var run = h.Recent[i];
+                    var isFail = run.Status == ScrapeRun.StatusFailed;
+                    var isDrop = !isFail && AdminModel.IsDrop(h.Recent, i);
+                    var classes = isFail ? "text-danger" : isDrop ? "text-danger fw-semibold" : "";
+                    var title = $"{run.StartedAt:yyyy-MM-dd HH:mm} UTC" + (run.Error is null ? "" : $"\n{run.Error}");
+                    <td class="text-end @classes" title="@title">
+                        @if (isFail)
+                        {
+                            <text>✗</text>
+                        }
+                        else
+                        {
+                            @run.RowsScraped
+                        }
+                    </td>
+                }
+                else
+                {
+                    <td class="text-end text-muted">—</td>
+                }
+            }
+            <td class="text-end">
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary bb-rerun-btn"
+                        data-source="@h.Source"
+                        @(isRunning ? "disabled" : "")
+                        title="Re-run just this scraper in the background">
+                    Re-run
+                </button>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>

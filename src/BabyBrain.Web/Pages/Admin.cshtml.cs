@@ -2,6 +2,7 @@ using BabyBrain.Scrapers;
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 
@@ -38,6 +39,16 @@ public class AdminModel : PageModel
         await LoadReportedAsync();
         await LoadSuggestionsAsync();
         RunningSources = _statusTracker.RunningSources;
+    }
+
+    // Returns just the "Recent runs" table as an HTML fragment. The Admin
+    // page fetches this when a background scrape finishes, swapping the
+    // table in place rather than reloading the whole page.
+    public async Task<IActionResult> OnGetHistoryAsync()
+    {
+        await LoadHistoryAsync();
+        RunningSources = _statusTracker.RunningSources;
+        return Partial("_RecentRunsTable", this);
     }
 
     private async Task LoadSuggestionsAsync()
