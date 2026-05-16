@@ -1,8 +1,14 @@
 name: Deploy
 
-# Auto-deploy on every push to main. workflow_dispatch also exposes per-deploy
-# env-var overrides: add a new input below, append a `KEY=${{ inputs.x }}` line
-# to the `script:` template, and that's it — no box visits needed thereafter.
+# Auto-deploy on every push to main. Env overrides flow to the box's
+# .env.deploy-override (deploy.sh writes it; docker-compose loads it on top of
+# .env). Two sources, both wired in the `script:` block below:
+#   * workflow_dispatch inputs  — e.g. scrape_on_startup.
+#   * repo secrets              — KEY=${{ secrets.KEY }}.
+# A secret that isn't set expands to a bare `KEY=`, which deploy.sh drops, so
+# the value already in .env on the box is left untouched. Set the secret and
+# the next deploy overrides the box. Managing a new variable = one line in the
+# `script:` block (plus, for an input, one entry under `inputs:`).
 on:
   push:
     branches: [main]
@@ -38,6 +44,15 @@ jobs:
           # plus one input declaration above.
           request_pty: false
           command_timeout: 10m
+          # Each secrets.* below is a no-op unless that repo secret is set —
+          # an unset secret expands to `KEY=` and deploy.sh drops it. Values
+          # must be free of spaces and shell metacharacters (token-passed via
+          # $SSH_ORIGINAL_COMMAND); fine for keys/tokens, mind the password.
           script: |
             /opt/babybrain/scripts/deploy.sh \
-              BABYBRAIN_SCRAPE_ON_STARTUP=${{ inputs.scrape_on_startup || 'false' }}
+              BABYBRAIN_SCRAPE_ON_STARTUP=${{ inputs.scrape_on_startup || 'false' }} \
+              ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }} \
+              BABYBRAIN_GH_TOKEN=${{ secrets.BABYBRAIN_GH_TOKEN }} \
+              BABYBRAIN_GH_REPO=${{ secrets.BABYBRAIN_GH_REPO }} \
+              BABYBRAIN_ADMIN_USER=${{ secrets.BABYBRAIN_ADMIN_USER }} \
+              BABYBRAIN_ADMIN_PASSWORD=${{ secrets.BABYBRAIN_ADMIN_PASSWORD }}

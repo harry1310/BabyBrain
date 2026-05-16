@@ -19,11 +19,15 @@ git pull --ff-only
 # don't leak forward. Empty file is fine — compose loads it with no effect.
 : > .env.deploy-override
 for arg in ${SSH_ORIGINAL_COMMAND:-}; do
-    # Only canonical UPPER_CASE env-var-shaped tokens. Anything else (a stray
-    # path, an option flag, an injection attempt) is silently dropped.
-    [[ "$arg" =~ ^[A-Z_][A-Z0-9_]*=.*$ ]] || continue
+    # Only canonical UPPER_CASE env-var-shaped tokens with a NON-EMPTY value.
+    # Anything else — a stray path, an option flag, an injection attempt, or a
+    # bare `KEY=` produced by a GitHub secret that isn't set — is silently
+    # dropped. Dropping `KEY=` is deliberate: an absent secret must not clobber
+    # the value already in .env on the box.
+    [[ "$arg" =~ ^[A-Z_][A-Z0-9_]*=.+$ ]] || continue
     echo "$arg" >> .env.deploy-override
-    echo "deploy: override $arg"
+    # Log the key only — never the value, since these can be secrets.
+    echo "deploy: override ${arg%%=*}"
 done
 
 docker compose up -d --build
