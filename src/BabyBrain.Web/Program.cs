@@ -1,5 +1,6 @@
 using BabyBrain.Scrapers;
 using BabyBrain.Scrapers.Barbican;
+using BabyBrain.Scrapers.Better;
 using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
 using BabyBrain.Scrapers.DesignMuseum;
@@ -192,6 +193,18 @@ builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<DesignMuseumFam
 // Postal Museum: single recurring "Post and Play" event page. Behind
 // Cloudflare, so it goes through Playwright rather than a plain HttpClient.
 builder.Services.AddScoped<IScraper, PostalMuseumPostAndPlayScraper>();
+
+// Talacre soft play via Better's (GLL) booking API — plain JSON, but the API
+// 404s unless the request carries an Origin header for the booking sub-domain.
+builder.Services.AddHttpClient<TalacreSoftPlayScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.Add("Origin", "https://bookings.better.org.uk");
+    c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TalacreSoftPlayScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
