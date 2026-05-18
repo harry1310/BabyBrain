@@ -21,6 +21,11 @@ public class EventOccurrence
     public required TimeOnly StartTime { get; set; }
     public TimeOnly? EndTime { get; set; }
 
+    // True when StartTime is a scraper-supplied placeholder rather than a time
+    // published by the source (e.g. Southbank no longer lists session times).
+    // The UI flags these so users know to check the source for the real time.
+    public bool TimeApproximate { get; set; }
+
     public required string SessionName { get; set; }
     public string? SessionNotes { get; set; }
 

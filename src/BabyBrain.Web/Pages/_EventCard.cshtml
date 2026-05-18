@@ -12,6 +12,12 @@
             {
                 <div class="small text-muted">to @end.ToString("HH:mm")</div>
             }
+            @if (Model.TimeApproximate)
+            {
+                <div class="mt-1">
+                    <span class="badge text-bg-warning" title="The source no longer publishes an exact start time — check the source listing for the schedule.">≈ approx</span>
+                </div>
+            }
         </div>
         <div class="flex-grow-1">
             <h4 class="h6 mb-1">@Model.SessionName</h4>

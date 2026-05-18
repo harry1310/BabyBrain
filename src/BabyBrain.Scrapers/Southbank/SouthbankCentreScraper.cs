@@ -8,14 +8,29 @@ using BabyBrain.Scrapers.Shared;
 namespace BabyBrain.Scrapers.Southbank;
 
 // Source: https://www.southbankcentre.co.uk/visit-us/families/#upcoming-events
-// Two-pass: the families hub lists curated family events in a carousel under
-// #upcoming-events; each card's cover link goes to a detail page whose
-// "Times & tickets" section embeds the canonical performance list as a
-// <br>-separated paragraph ("Fri 15 May 2026, 10.30am, The Clore Ballroom").
+// The families hub lists curated family events in a carousel under
+// #upcoming-events. Each .c-event-card already carries everything we need:
+// title, date range, listing description, venue (hall) and price — so this
+// scraper works off the hub alone, no per-event detail fetch.
+//
+// NOTE (2026 redesign): Southbank's site rebuild removed the per-performance
+// time list from event detail pages — detail pages now show only a date
+// *range*. The exact session times survive only inside the Tessitura
+// ticketing system, which sits behind a Queue-it waiting room; we deliberately
+// do not scrape that. So when the hub card gives a date but no time, we emit a
+// placeholder start time (PlaceholderStart) and set TimeApproximate = true so
+// the UI flags it. When the card *does* carry a time (e.g. "Sat 23 May 2026,
+// 11am") we use it and leave TimeApproximate false.
 public sealed class SouthbankCentreScraper : IScraper
 {
     private const string HubUrl = "https://www.southbankcentre.co.uk/visit-us/families/";
+    private const string Address = "Belvedere Road, London";
     private const string Postcode = "SE1 8XX"; // Southbank Centre, Belvedere Road
+
+    // Used when the hub card gives a date but no time. Southbank no longer
+    // publishes exact session times on the public site; this is an admitted
+    // guess. Rows built with it carry TimeApproximate = true so the UI flags it.
+    private static readonly TimeOnly PlaceholderStart = new(10, 0);
 
     public string SourceId => "southbank_centre_families";
     public string Category => Categories.Concert;
@@ -33,149 +48,150 @@ public sealed class SouthbankCentreScraper : IScraper
 
         var hubHtml = await _fetcher.FetchRenderedHtmlAsync(HubUrl, "#upcoming-events ~ * .c-event-card", ct: ct);
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
-        var teasers = ExtractTeasers(hub).ToList();
 
-        foreach (var teaser in teasers)
+        foreach (var card in ExtractCards(hub))
         {
             ct.ThrowIfCancellationRequested();
-            try
-            {
-                var detailHtml = await _fetcher.FetchRenderedHtmlAsync(teaser.Url, "#times-tickets", ct: ct);
-                var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
-                rows.AddRange(BuildOccurrences(detail, teaser, today, horizonEnd, now));
-            }
-            catch (Exception ex)
-            {
-                // Detail page without a recognisable times block (Tessitura embed events,
-                // running installations with no fixed schedule, etc.) — skip but surface
-                // the reason so we know which events we're missing.
-                Console.WriteLine($"  skipped {teaser.Url}: {ex.GetType().Name}: {ex.Message.Split('\n')[0]}");
-            }
+            rows.AddRange(BuildOccurrences(card, today, horizonEnd, now));
         }
         return rows;
     }
 
-    private record Teaser(string Title, string Summary, string Url);
+    private record Card(string Title, string Summary, string Url, string Venue,
+                         string DateRangeText, bool IsFree, decimal? Cost);
 
-    private static IEnumerable<Teaser> ExtractTeasers(IDocument hub)
+    private static IEnumerable<Card> ExtractCards(IDocument hub)
     {
         var anchor = hub.QuerySelector("#upcoming-events");
-        if (anchor is null) yield break;
-        // The carousel lives in a sibling .c-container__wrap after the anchor div.
-        var section = anchor.Closest("section");
+        var section = anchor?.Closest("section");
         if (section is null) yield break;
+
+        // The carousel can clone slides for its scroll behaviour, so the same
+        // .c-event-card may appear more than once — dedupe on the cover URL.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var card in section.QuerySelectorAll(".c-event-card"))
         {
-            var link = card.QuerySelector("a.c-event-card__cover-link");
-            var href = link?.GetAttribute("href");
-            if (string.IsNullOrEmpty(href)) continue;
+            var href = card.QuerySelector("a.c-event-card__cover-link")?.GetAttribute("href");
+            if (string.IsNullOrWhiteSpace(href) || !seen.Add(href)) continue;
 
             var title = card.QuerySelector(".c-event-card__title")?.TextContent.Trim() ?? "";
+            var dateText = card.QuerySelector(".c-event-card__daterange")?.TextContent.Trim() ?? "";
+            if (title.Length == 0 || dateText.Length == 0) continue;
+
             var summary = card.QuerySelector(".c-event-card__listing-details")?.TextContent.Trim() ?? "";
-            yield return new Teaser(title, summary, href);
+            var venue = card.QuerySelector(".c-event-card__location")?.TextContent.Trim();
+            if (string.IsNullOrEmpty(venue)) venue = "Southbank Centre";
+            var (isFree, cost) = TextParsing.ParsePrice(card.QuerySelector(".c-event-card__price-label")?.TextContent);
+
+            yield return new Card(title, summary, href, venue, dateText, isFree, cost);
         }
     }
 
-    private IEnumerable<EventOccurrence> BuildOccurrences(IDocument detail, Teaser teaser, DateOnly from, DateOnly to, DateTimeOffset now)
+    private IEnumerable<EventOccurrence> BuildOccurrences(Card card, DateOnly from, DateOnly to, DateTimeOffset now)
     {
-        var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Title + " " + teaser.Summary);
-        var isFree = DetectFree(detail);
-        var notes = ExtractDescription(detail) ?? (teaser.Summary.Length > 0 ? teaser.Summary : null);
+        var (minAge, maxAge) = TextParsing.ParseAgeRange(card.Title + " " + card.Summary);
+        var (dates, start, timeKnown) = ParseSchedule(card.DateRangeText, from);
+        var notes = card.Summary.Length > 0 ? card.Summary : null;
 
-        // Canonical performance list is the .smaller-p paragraph inside the
-        // override block. Each <br>-separated line is one performance.
-        var overrideBlock = detail.QuerySelector(".c-event-details-group__date-time-override-information .smaller-p");
-        if (overrideBlock is null) yield break;
-
-        var html = overrideBlock.InnerHtml;
-        var rawLines = Regex.Split(html, @"<br\s*/?>", RegexOptions.IgnoreCase);
-
-        foreach (var raw in rawLines)
+        foreach (var date in dates)
         {
-            var text = Regex.Replace(raw, "<[^>]+>", "").Trim();
-            if (text.Length == 0) continue;
-
-            var parsed = ParseLine(text);
-            if (parsed is null) continue;
-            if (parsed.Date < from || parsed.Date > to) continue;
+            if (date < from || date > to) continue;
 
             yield return new EventOccurrence
             {
-                ExternalKey = $"{SourceId}:{Slug(teaser.Url)}:{parsed.Date:yyyy-MM-dd}:{parsed.StartTime:HHmm}",
+                ExternalKey = $"{SourceId}:{Slug(card.Url)}:{date:yyyy-MM-dd}",
                 Source = SourceId,
                 Category = Category,
-                SourceUrl = teaser.Url,
-                Date = parsed.Date,
-                StartTime = parsed.StartTime,
+                SourceUrl = card.Url,
+                Date = date,
+                StartTime = start,
                 EndTime = null,
-                SessionName = teaser.Title,
+                TimeApproximate = !timeKnown,
+                SessionName = card.Title,
                 SessionNotes = notes,
-                VenueName = parsed.Venue,
-                VenueAddress = "Belvedere Road, London",
+                VenueName = card.Venue,
+                VenueAddress = Address,
                 Postcode = Postcode,
                 MinAgeMonths = minAge,
                 MaxAgeMonths = maxAge,
                 TermTimeOnly = false,
-                IsFree = isFree,
+                IsFree = card.IsFree,
+                Cost = card.Cost,
                 LastSeenAt = now,
             };
         }
     }
 
-    // Southbank renders free events as a disabled "Free – no ticket required"
-    // pill inside the event masthead's booking block, identified by the class
-    // c-btn--free-no-ticket. Fall back to "Free" text matching in case the
-    // class name shifts but the wording stays.
-    private static bool DetectFree(IDocument detail)
+    // Hub-card date strings seen in the wild:
+    //   "Fri 22 May – Fri 10 Jul 2026"   inclusive run  -> one row per day
+    //   "Sat 23 May 2026, 11am"          single date + time
+    //   "Sat 23 May 2026"                single date, no time
+    //   "Wed 27 May & Thu 28 May 2026"   two discrete dates
+    // Returns the concrete dates, the start time to stamp, and whether that
+    // time came from the page (true) or is the placeholder (false).
+    private static (List<DateOnly> Dates, TimeOnly Start, bool TimeKnown) ParseSchedule(string raw, DateOnly today)
     {
-        var booking = detail.QuerySelector(".c-event-masthead__event-booking");
-        if (booking is null) return false;
-        if (booking.QuerySelector(".c-btn--free-no-ticket") is not null) return true;
-        var (isFree, _) = TextParsing.ParsePrice(booking.TextContent);
-        return isFree;
+        var text = Regex.Replace(raw, @"\s+", " ").Trim();
+
+        // Pull an optional trailing ", <time>" (e.g. ", 11am" / ", 10.30am").
+        TimeOnly? time = null;
+        var tm = Regex.Match(text, @",\s*(\d{1,2}(?:[.:]\d{2})?\s*(?:am|pm))\s*$", RegexOptions.IgnoreCase);
+        if (tm.Success)
+        {
+            time = TextParsing.ParseClockTime(tm.Groups[1].Value);
+            text = text[..tm.Index].Trim();
+        }
+
+        var dates = new List<DateOnly>();
+        var rangeParts = Regex.Split(text, @"\s*[–—-]\s*");
+        if (rangeParts.Length == 2
+            && TryParseDate(rangeParts[0], rangeParts[1], today, out var rangeStart)
+            && TryParseDate(rangeParts[1], rangeParts[1], today, out var rangeEnd))
+        {
+            // The start date carries no year of its own; if borrowing the end's
+            // year put it after the end, the run spans a year boundary.
+            if (rangeStart > rangeEnd) rangeStart = rangeStart.AddYears(-1);
+            for (var d = rangeStart; d <= rangeEnd; d = d.AddDays(1)) dates.Add(d);
+        }
+        else
+        {
+            // One or more discrete dates joined by "&" / "and"; only the last
+            // token carries the year.
+            var tokens = Regex.Split(text, @"\s*(?:&|and)\s*", RegexOptions.IgnoreCase);
+            var yearSource = tokens[^1];
+            foreach (var tok in tokens)
+                if (TryParseDate(tok, yearSource, today, out var d)) dates.Add(d);
+        }
+
+        return (dates, time ?? PlaceholderStart, time is not null);
     }
 
-    // The actual marketing copy lives in .c-event-masthead__intro on the detail
-    // page (a single <p> usually). Earlier versions used .c-event-card__listing-details
-    // from the hub-page teaser, which is listing-metadata badges rather than prose.
-    // Returns null if the block isn't present so the caller can fall back.
-    private static string? ExtractDescription(IDocument detail)
+    // Parses "(Wday) 22 May (2026)". When the token omits the year it is taken
+    // from yearSource (the year-bearing token of the same date string).
+    private static bool TryParseDate(string token, string yearSource, DateOnly today, out DateOnly date)
     {
-        var intro = detail.QuerySelector(".c-event-masthead__intro")?.TextContent?.Trim();
-        if (string.IsNullOrEmpty(intro)) return null;
-        var collapsed = Regex.Replace(intro, @"\s+", " ").Trim();
-        return Truncate(collapsed, 400);
-    }
+        date = default;
+        var m = Regex.Match(token.Trim(), @"(\d{1,2})\s+([A-Za-z]+)(?:\s+(\d{4}))?", RegexOptions.IgnoreCase);
+        if (!m.Success) return false;
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max].TrimEnd() + "…";
+        var day = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        if (!TryParseMonth(m.Groups[2].Value, out var month)) return false;
 
-    private record ParsedLine(DateOnly Date, TimeOnly StartTime, string Venue);
+        int year;
+        if (m.Groups[3].Success)
+        {
+            year = int.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            var ym = Regex.Match(yearSource, @"\b(\d{4})\b");
+            year = ym.Success ? int.Parse(ym.Groups[1].Value, CultureInfo.InvariantCulture) : today.Year;
+        }
 
-    private static readonly Regex LineRegex = new(
-        @"^(?<wday>\w+)\s+(?<d>\d{1,2})\s+(?<m>\w+)\s+(?<y>\d{4}),\s+(?<t>\d{1,2}(?:[\.:]\d{2})?\s*(?:am|pm)),\s+(?<venue>.+)$",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static ParsedLine? ParseLine(string line)
-    {
-        var m = LineRegex.Match(line);
-        if (!m.Success) return null;
-
-        if (!int.TryParse(m.Groups["d"].Value, out var day)) return null;
-        if (!int.TryParse(m.Groups["y"].Value, out var year)) return null;
-        if (!TryParseMonth(m.Groups["m"].Value, out var month)) return null;
-
-        DateOnly date;
         try { date = new DateOnly(year, month, day); }
-        catch (ArgumentOutOfRangeException) { return null; }
-
-        var time = TextParsing.ParseClockTime(m.Groups["t"].Value);
-        if (time is null) return null;
-
-        var venue = m.Groups["venue"].Value.Trim();
-        // The detail page sometimes appends a hall/foyer ("The Clore Ballroom Level 2,
-        // Royal Festival Hall") — keep everything as the venue label.
-        return new ParsedLine(date, time.Value, venue);
+        catch (ArgumentOutOfRangeException) { return false; }
+        return true;
     }
 
     private static bool TryParseMonth(string raw, out int month)
