@@ -3,6 +3,7 @@ using BabyBrain.Scrapers.Barbican;
 using BabyBrain.Scrapers.Better;
 using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
+using BabyBrain.Scrapers.CityOfLondon;
 using BabyBrain.Scrapers.DesignMuseum;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.PostalMuseum;
@@ -11,6 +12,7 @@ using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
 using BabyBrain.Scrapers.Va;
 using BabyBrain.Scrapers.WigmoreHall;
+using BabyBrain.Scrapers.WildLondon;
 using BabyBrain.Web.Data;
 using BabyBrain.Web.Middleware;
 using BabyBrain.Web.Services;
@@ -149,6 +151,7 @@ builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
 builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
 builder.Services.AddScoped<IScraper, BritishMuseumScraper>();
 builder.Services.AddScoped<IScraper, SouthbankCentreScraper>();
+builder.Services.AddScoped<IScraper, WildLondonFamilyLearningScraper>();
 // V&A: Playwright fetches the listing, but when a listing card has no
 // itemprop="description" we fall back to a plain HttpClient GET of the
 // detail page just for its <meta name="description"> — much faster than
@@ -205,6 +208,18 @@ builder.Services.AddHttpClient<TalacreSoftPlayScraper>(c =>
     c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TalacreSoftPlayScraper>());
+
+// City of London libraries: server-rendered HTML behind a CDN that 403s any
+// non-mainstream UA (the BabyBrainScraper UA included), so this one needs a
+// full Chrome UA string — verified returning 200.
+builder.Services.AddHttpClient<CityOfLondonLibrariesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<CityOfLondonLibrariesScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
