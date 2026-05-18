@@ -67,6 +67,32 @@ public sealed class ScrapeRunner
         try
         {
             var rows = await scraper.ScrapeAsync(horizonDays);
+
+            // A scrape that completes but returns nothing is almost always a
+            // broken selector, not a genuinely empty source. Treat it as a
+            // failure — and crucially skip the upsert: it prunes rows the
+            // scrape didn't return, so upserting an empty result would wipe
+            // every existing row for this source.
+            if (rows.Count == 0)
+            {
+                const string emptyError = "Scraper completed but returned 0 events — treated as a failure.";
+                var emptyAt = DateTimeOffset.UtcNow;
+                _logger.LogWarning("Scraper {Source} returned 0 rows — treated as failure", scraper.SourceId);
+
+                await TryRecordRunAsync(new ScrapeRun
+                {
+                    Source = scraper.SourceId,
+                    StartedAt = startedAt,
+                    CompletedAt = emptyAt,
+                    Status = ScrapeRun.StatusFailed,
+                    RowsScraped = 0,
+                    Error = emptyError,
+                }, ct);
+
+                await NotifyAlertSinkAsync(scraper.SourceId, success: false, error: emptyError, ct);
+                return new ScraperOutcome(scraper.SourceId, false, 0, emptyError, emptyAt);
+            }
+
             await _store.UpsertOccurrencesAsync(scraper.SourceId, rows, ct);
 
             var completedAt = DateTimeOffset.UtcNow;
@@ -92,22 +118,15 @@ public sealed class ScrapeRunner
             var detail = Truncate(ex.ToString(), ErrorMaxLength);
             _logger.LogError(ex, "Scraper {Source} failed", scraper.SourceId);
 
-            try
+            await TryRecordRunAsync(new ScrapeRun
             {
-                await _store.RecordRunAsync(new ScrapeRun
-                {
-                    Source = scraper.SourceId,
-                    StartedAt = startedAt,
-                    CompletedAt = completedAt,
-                    Status = ScrapeRun.StatusFailed,
-                    RowsScraped = 0,
-                    Error = detail,
-                }, ct);
-            }
-            catch (Exception saveEx)
-            {
-                _logger.LogError(saveEx, "Failed to record ScrapeRun for {Source}", scraper.SourceId);
-            }
+                Source = scraper.SourceId,
+                StartedAt = startedAt,
+                CompletedAt = completedAt,
+                Status = ScrapeRun.StatusFailed,
+                RowsScraped = 0,
+                Error = detail,
+            }, ct);
 
             await NotifyAlertSinkAsync(scraper.SourceId, success: false, error: detail, ct);
             return new ScraperOutcome(scraper.SourceId, false, 0, detail, completedAt);
@@ -146,6 +165,17 @@ public sealed class ScrapeRunner
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Alert sink notification failed for {Source}", sourceId);
+        }
+    }
+
+    // Records a run, swallowing storage errors — failing to log the run must
+    // never mask the scrape outcome we're trying to report.
+    private async Task TryRecordRunAsync(ScrapeRun run, CancellationToken ct)
+    {
+        try { await _store.RecordRunAsync(run, ct); }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to record ScrapeRun for {Source}", run.Source);
         }
     }
 
