@@ -40,8 +40,8 @@ public static partial class TextParsing
         // "aged five and under", "five and under", "5s and under"
         m = Regex.Match(t, @"(?:aged\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)s?\s+(?:year[\s\-]?olds?\s+)?(?:and|or)\s+under");
         if (m.Success && WordToNumber(m.Groups[1].Value) is int n1) return (0, n1 * 12);
-        // "under fives", "under 5s"
-        m = Regex.Match(t, @"under\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)s?\b");
+        // "under fives", "under 5s", "under-5s" (hyphenated, as Southbank writes it)
+        m = Regex.Match(t, @"under[\s\-]+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)s?\b");
         if (m.Success && WordToNumber(m.Groups[1].Value) is int n2) return (0, n2 * 12);
         if (t.Contains("baby")) return (0, 12);
         if (t.Contains("toddler")) return (12, 36);

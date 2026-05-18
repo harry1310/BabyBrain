@@ -24,6 +24,7 @@ public static class EventOccurrenceUpsert
                 current.Date = row.Date;
                 current.StartTime = row.StartTime;
                 current.EndTime = row.EndTime;
+                current.TimeApproximate = row.TimeApproximate;
                 current.SessionName = row.SessionName;
                 current.SessionNotes = row.SessionNotes;
                 current.VenueName = row.VenueName;
