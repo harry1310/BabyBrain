@@ -8,6 +8,12 @@ namespace BabyBrain.Web.Pages;
 
 public class IndexModel : PageModel
 {
+    // "Today" for our users means today in London, not on the server. The
+    // production container runs UTC, so DateTime.Now there is UTC, which
+    // would slip the search window by a day for a user opening the site
+    // just after midnight BST. Pin to Europe/London.
+    private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+
     private readonly BabyBrainDbContext _db;
     public IndexModel(BabyBrainDbContext db) => _db = db;
 
@@ -56,7 +62,7 @@ public class IndexModel : PageModel
 
     private static (DateOnly from, DateOnly to) ResolveDateWindow(SearchFilter f)
     {
-        var today = DateOnly.FromDateTime(DateTime.Now.Date);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, London).Date);
         return f.Range switch
         {
             "tomorrow" => (today.AddDays(1), today.AddDays(1)),

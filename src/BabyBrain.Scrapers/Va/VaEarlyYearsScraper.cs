@@ -27,6 +27,12 @@ public sealed class VaEarlyYearsScraper : IScraper
     public string SourceId => "va_early_years";
     public string Category => Categories.Museum;
 
+    // TryParseDateTime reads the V&A's "+0100"/"+0000" offset correctly, but
+    // DateTimeOffset.LocalDateTime then resolves against the *machine's* TZ.
+    // The production container runs UTC, so BST events shifted an hour early.
+    // Convert through London explicitly, matching Barbican / Wigmore Hall.
+    private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+
     private readonly PlaywrightFetcher _fetcher;
     private readonly HttpClient _http;
 
@@ -76,18 +82,20 @@ public sealed class VaEarlyYearsScraper : IScraper
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) return Array.Empty<EventOccurrence>();
 
         if (!TryParseDateTime(startRaw, out var start)) return Array.Empty<EventOccurrence>();
-        var seriesFirst = DateOnly.FromDateTime(start.LocalDateTime);
-        var startTime = TimeOnly.FromDateTime(start.LocalDateTime);
+        var startLondon = TimeZoneInfo.ConvertTime(start, London).DateTime;
+        var seriesFirst = DateOnly.FromDateTime(startLondon);
+        var startTime = TimeOnly.FromDateTime(startLondon);
 
         var endRaw = article.QuerySelector("meta[itemprop='endDate']")?.GetAttribute("content")?.Trim();
         DateOnly seriesLast = seriesFirst;
         TimeOnly? sessionEndTime = null;
         if (!string.IsNullOrEmpty(endRaw) && TryParseDateTime(endRaw, out var end))
         {
-            seriesLast = DateOnly.FromDateTime(end.LocalDateTime);
+            var endLondon = TimeZoneInfo.ConvertTime(end, London).DateTime;
+            seriesLast = DateOnly.FromDateTime(endLondon);
             // The schema.org endDate carries the *last session's* end clock-time,
             // which is the same slot every week — apply it to every occurrence.
-            sessionEndTime = TimeOnly.FromDateTime(end.LocalDateTime);
+            sessionEndTime = TimeOnly.FromDateTime(endLondon);
         }
 
         // Drop the card entirely if the whole series sits outside the horizon.
