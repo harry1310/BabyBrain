@@ -29,6 +29,12 @@ public sealed class FitzroviaTockifyScraper : IScraper
     ];
     private const string BaseUrl = "https://calendar.fitzroviacommunitycentre.org/whatsonatfcc/pinboard";
 
+    // Tockify emits startDate/endDate with the venue's offset (e.g. "+01:00" in BST).
+    // DateTimeOffset.LocalDateTime would resolve to the *machine's* local time —
+    // fine on a UK dev box but the production container runs UTC, so events came
+    // out an hour early during BST. Always pin to Europe/London explicitly.
+    private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+
     private record SessionConfig(string SearchTerm, int MinAgeMonths, int MaxAgeMonths);
 
     public string SourceId => "tockify_fitzrovia";
@@ -77,7 +83,7 @@ public sealed class FitzroviaTockifyScraper : IScraper
                 var ev = item.Deserialize<TockifyEvent>(opts);
                 if (ev is null || ev.StartDate == default) continue;
 
-                var localStart = ev.StartDate.LocalDateTime;
+                var localStart = TimeZoneInfo.ConvertTime(ev.StartDate, London).DateTime;
                 var date = DateOnly.FromDateTime(localStart);
                 if (date > horizonEnd) continue;
 
@@ -90,7 +96,7 @@ public sealed class FitzroviaTockifyScraper : IScraper
                     SourceUrl = ev.Url,
                     Date = date,
                     StartTime = TimeOnly.FromDateTime(localStart),
-                    EndTime = ev.EndDate == default ? null : TimeOnly.FromDateTime(ev.EndDate.LocalDateTime),
+                    EndTime = ev.EndDate == default ? null : TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(ev.EndDate, London).DateTime),
                     SessionName = ev.Name ?? "Event",
                     SessionNotes = null,
                     VenueName = ev.Location?.Name ?? "Fitzrovia Community Centre",
