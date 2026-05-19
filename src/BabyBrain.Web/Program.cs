@@ -7,6 +7,7 @@ using BabyBrain.Scrapers.CityOfLondon;
 using BabyBrain.Scrapers.DesignMuseum;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.Lso;
+using BabyBrain.Scrapers.Ltm;
 using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
@@ -233,6 +234,11 @@ builder.Services.AddHttpClient<LsoUnder5sConcertsScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<LsoUnder5sConcertsScraper>());
+
+// London Transport Museum "Singing and Story" under-5s sessions: Drupal HTML
+// behind Cloudflare, so it goes through Playwright. Fetches a second page (the
+// "Show all dates" target) for the full term-time-aware date list.
+builder.Services.AddScoped<IScraper, LtmSingingAndStoryScraper>();
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
