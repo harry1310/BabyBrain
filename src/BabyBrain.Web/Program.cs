@@ -6,6 +6,7 @@ using BabyBrain.Scrapers.Camden;
 using BabyBrain.Scrapers.CityOfLondon;
 using BabyBrain.Scrapers.DesignMuseum;
 using BabyBrain.Scrapers.Islington;
+using BabyBrain.Scrapers.Lso;
 using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
@@ -220,6 +221,18 @@ builder.Services.AddHttpClient<CityOfLondonLibrariesScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<CityOfLondonLibrariesScraper>());
+
+// LSO under-5s "Musical Storytelling" concerts: server-rendered WordPress HTML,
+// fine over plain HTTP with a browser-shaped UA. Follows each concert's detail
+// page for the child ticket price.
+builder.Services.AddHttpClient<LsoUnder5sConcertsScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<LsoUnder5sConcertsScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
