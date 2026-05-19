@@ -9,6 +9,7 @@ using BabyBrain.Scrapers.Holborn;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.Lso;
 using BabyBrain.Scrapers.Ltm;
+using BabyBrain.Scrapers.MwHealth;
 using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
@@ -252,6 +253,17 @@ builder.Services.AddHttpClient<HolbornEarlyYearsScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<HolbornEarlyYearsScraper>());
+
+// Moon Women's Health baby/child/family classes: a server-rendered HTML table,
+// fine over plain HTTP with a browser-shaped UA.
+builder.Services.AddHttpClient<MwHealthClassesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<MwHealthClassesScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 

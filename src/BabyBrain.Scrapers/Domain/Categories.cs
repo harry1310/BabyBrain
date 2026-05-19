@@ -14,10 +14,11 @@ public static class Categories
     public const string Cinema = "cinema";
     public const string Class = "class";
     public const string Outdoors = "outdoors";
+    public const string Exercise = "exercise";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
-        Community, Library, Museum, Gallery, Concert, Cinema, Class, Outdoors,
+        Community, Library, Museum, Gallery, Concert, Cinema, Class, Outdoors, Exercise,
     };
 
     // Human-readable label for the UI. Falls back to title-cased category if
@@ -32,6 +33,7 @@ public static class Categories
         Cinema => "Cinema",
         Class => "Class",
         Outdoors => "Outdoors",
+        Exercise => "Exercise",
         _ => string.IsNullOrEmpty(category) ? "Other" : char.ToUpper(category[0]) + category[1..],
     };
 
@@ -47,6 +49,7 @@ public static class Categories
         Cinema => "#dc3545",    // red
         Class => "#20c997",     // teal
         Outdoors => "#74b816",  // lime
+        Exercise => "#0c8599",  // dark cyan
         _ => "#6c757d",         // grey
     };
 }
