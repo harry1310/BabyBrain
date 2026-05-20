@@ -4,6 +4,7 @@ using AngleSharp;
 using AngleSharp.Dom;
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Scrapers.Shared;
+using Microsoft.Playwright;
 
 namespace BabyBrain.Scrapers.BritishMuseum;
 
@@ -36,27 +37,51 @@ public sealed class BritishMuseumScraper : IScraper
         var rows = new List<EventOccurrence>();
 
         // Hub page: pull event card links from the #family-events section.
-        // Wait on the rendered teaser anchors — the #family-events div itself
-        // is an empty jump-link anchor and never becomes "visible".
-        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(HubUrl, "a.teaser__anchor[href^='/events/']", ct: ct);
+        // Wait Attached, not Visible — the carousel anchors are in the DOM
+        // before the carousel paints, and we only read the markup. Visible
+        // sometimes timed out on the production VPS even though the data
+        // was present, leading to a 0-event success.
+        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(
+            HubUrl,
+            "a.teaser__anchor[href^='/events/']",
+            WaitForSelectorState.Attached,
+            ct);
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
         var teasers = ExtractTeasers(hub).ToList();
 
+        // If every teaser fetch ends in a swallowed timeout we'd return 0 rows
+        // with no error — indistinguishable from a real "no events" result.
+        // Keep skipping individual non-listing pages, but remember the last
+        // exception so we can rethrow if EVERY teaser fetch failed.
+        var attempted = 0;
+        Exception? lastFailure = null;
         foreach (var teaser in teasers)
         {
             ct.ThrowIfCancellationRequested();
+            attempted++;
             try
             {
-                var detailHtml = await _fetcher.FetchRenderedHtmlAsync(teaser.Url, "[data-js-event-occurrences]", ct: ct);
+                var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
+                    teaser.Url,
+                    "[data-js-event-occurrences]",
+                    WaitForSelectorState.Attached,
+                    ct);
                 var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
                 rows.AddRange(BuildOccurrences(detail, teaser, today, horizonEnd, now));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // Detail pages without an occurrence list (e.g. sold-out, draft, festival landing
-                // pages) throw on the selector wait. Skip silently — caller logs scrape totals.
+                // pages) throw on the selector wait. Skip individually, but surface if ALL fail.
+                lastFailure = ex;
             }
         }
+
+        if (rows.Count == 0 && attempted > 0 && lastFailure is not null)
+            throw new InvalidOperationException(
+                $"All {attempted} British Museum family event detail fetches failed; last error: {lastFailure.Message}",
+                lastFailure);
+
         return rows;
     }
 
