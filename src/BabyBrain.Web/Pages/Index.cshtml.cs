@@ -27,8 +27,9 @@ public class IndexModel : PageModel
     public List<EventOccurrence> Results { get; private set; } = new();
     public Dictionary<string, (double Lat, double Lng)> PostcodeCoords { get; private set; } = new();
 
-    // One-line status for the distance filter — a confirmation when it applied,
-    // or an explanation when it couldn't (bad postcode, no origin given).
+    // Shown only when a distance filter was requested but couldn't be applied
+    // (bad postcode, or no origin given). Null when the filter applied fine —
+    // the results themselves are the confirmation.
     public string? DistanceNote { get; private set; }
 
     public async Task OnGetAsync(
@@ -115,18 +116,7 @@ public class IndexModel : PageModel
                 return Data.Geocode.DistanceMiles(o.Lat, o.Lng, c.Lat, c.Lng) <= miles;
             })
             .ToList();
-
-        DistanceNote = Filter.OriginLat is not null
-            ? $"Showing events within {MilesLabel(miles)} of your location."
-            : $"Showing events within {MilesLabel(miles)} of {Data.Geocode.Normalise(Filter.OriginPostcode!)}.";
     }
-
-    private static string MilesLabel(double miles) => miles switch
-    {
-        0.5 => "½ mile",
-        1 => "1 mile",
-        _ => $"{miles:0.##} miles",
-    };
 
     private static (DateOnly from, DateOnly to) ResolveDateWindow(SearchFilter f)
     {

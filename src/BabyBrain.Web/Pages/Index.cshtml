@@ -13,16 +13,24 @@
 <h1 class="mb-4">What's on for little ones</h1>
 
 <form method="get" class="card p-3 mb-4 bg-light">
-    <div class="mb-3">
-        <label class="form-label fw-semibold mb-2">When?</label>
-        <div class="d-flex flex-wrap gap-2" role="radiogroup">
-            @foreach (var (key, label) in ranges)
-            {
-                var checkedAttr = Model.Filter.Range == key ? "checked" : null;
-                <input type="radio" class="btn-check" name="range" id="range-@key" value="@key" @checkedAttr
-                       onchange="document.getElementById('customDateRow').classList.toggle('d-none', this.value !== 'custom')" />
-                <label class="btn btn-outline-primary" for="range-@key">@label</label>
-            }
+    @* When + age share a row on wide screens, stack on narrow ones. *@
+    <div class="d-flex flex-wrap gap-4 align-items-end mb-3">
+        <div>
+            <label class="form-label fw-semibold mb-2 d-block">When?</label>
+            <div class="d-flex flex-wrap gap-2" role="radiogroup">
+                @foreach (var (key, label) in ranges)
+                {
+                    var checkedAttr = Model.Filter.Range == key ? "checked" : null;
+                    <input type="radio" class="btn-check" name="range" id="range-@key" value="@key" @checkedAttr
+                           onchange="document.getElementById('customDateRow').classList.toggle('d-none', this.value !== 'custom')" />
+                    <label class="btn btn-outline-primary" for="range-@key">@label</label>
+                }
+            </div>
+        </div>
+        <div>
+            <label for="ageMonths" class="form-label fw-semibold">How old is your child? <span class="text-muted">(months)</span></label>
+            <input type="number" min="0" max="60" id="ageMonths" name="ageMonths" value="@Model.Filter.AgeMonths"
+                   class="form-control" placeholder="e.g. 9" style="max-width:10rem" />
         </div>
     </div>
 
@@ -33,7 +41,8 @@
                class="form-control" style="max-width:14rem" />
     </div>
 
-    <div class="mb-3">
+    @* Distance controls + the Search button share a row on wide screens. *@
+    <div>
         <label class="form-label fw-semibold">Distance from you</label>
         <div class="d-flex flex-wrap gap-2 align-items-center">
             <select name="radius" id="radius" class="form-select" style="max-width:11rem">
@@ -48,23 +57,16 @@
                    maxlength="32" class="form-control" placeholder="Your postcode" style="max-width:11rem"
                    autocomplete="postal-code" />
             <button type="button" id="useLocationBtn" class="btn btn-outline-secondary">📍 Use my location</button>
+            <button type="submit" class="btn btn-primary px-4">Search</button>
         </div>
-        <div class="form-text">Pick a distance, then enter your postcode (or use your location) and press Search to only see events near you.</div>
         <div id="locationMsg" class="form-text text-primary"></div>
+        @if (!string.IsNullOrEmpty(Model.DistanceNote))
+        {
+            <div class="form-text text-danger">@Model.DistanceNote</div>
+        }
         @* Browser geolocation drops its coordinates here; typing a postcode clears them. *@
         <input type="hidden" name="originLat" id="originLat" value="@(Model.Filter.OriginLat?.ToString(inv))" />
         <input type="hidden" name="originLng" id="originLng" value="@(Model.Filter.OriginLng?.ToString(inv))" />
-    </div>
-
-    <div class="row g-3 align-items-end">
-        <div class="col-md-6">
-            <label for="ageMonths" class="form-label fw-semibold">How old is your child? <span class="text-muted">(months)</span></label>
-            <input type="number" min="0" max="60" id="ageMonths" name="ageMonths" value="@Model.Filter.AgeMonths"
-                   class="form-control" placeholder="e.g. 9" style="max-width:10rem" />
-        </div>
-        <div class="col-md-3">
-            <button type="submit" class="btn btn-primary w-100">Search</button>
-        </div>
     </div>
 </form>
 
@@ -140,10 +142,6 @@
 })();
 </script>
 
-@if (!string.IsNullOrEmpty(Model.DistanceNote))
-{
-    <div class="alert alert-info py-2 small">@Model.DistanceNote</div>
-}
 
 @if (Model.Results.Count == 0)
 {
