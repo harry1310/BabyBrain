@@ -44,12 +44,12 @@ public static class Categories
         Community => "#0d6efd", // blue
         Library => "#198754",   // green
         Museum => "#6f42c1",    // purple
-        Gallery => "#d63384",   // pink
+        Gallery => "#d63384",   // magenta
         Concert => "#fd7e14",   // orange
         Cinema => "#dc3545",    // red
         Class => "#20c997",     // teal
         Outdoors => "#74b816",  // lime
-        Exercise => "#0c8599",  // dark cyan
+        Exercise => "#f06595",  // pink
         _ => "#6c757d",         // grey
     };
 }
