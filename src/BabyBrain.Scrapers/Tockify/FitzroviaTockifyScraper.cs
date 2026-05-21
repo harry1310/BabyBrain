@@ -29,6 +29,21 @@ public sealed class FitzroviaTockifyScraper : IScraper
     ];
     private const string BaseUrl = "https://calendar.fitzroviacommunitycentre.org/whatsonatfcc/pinboard";
 
+    // Some sessions on FCC's calendar are run by outside companies — FCC just
+    // advertises them, with no price or booking link. For those we override the
+    // details FCC omits from the operator's own site. Matched on a substring of
+    // the event NAME, not the search term that returned it: Tockify events can
+    // surface under several of our searches and the last-write-wins merge below
+    // would otherwise tag an event by whichever search happened to land last.
+    private static readonly Operator[] Operators =
+    [
+        // Mini Mozart under-5s music classes. £25 is their taster-class rate —
+        // the cheapest way in; ongoing it's a monthly/annual subscription.
+        new(NameMatch: "mini mozart",
+            BookingUrl: "https://www.minimozart.com/product/fitzrovia/",
+            FromCost: 25m),
+    ];
+
     // Tockify emits startDate/endDate with the venue's offset (e.g. "+01:00" in BST).
     // DateTimeOffset.LocalDateTime would resolve to the *machine's* local time —
     // fine on a UK dev box but the production container runs UTC, so events came
@@ -36,6 +51,12 @@ public sealed class FitzroviaTockifyScraper : IScraper
     private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
 
     private record SessionConfig(string SearchTerm, int MinAgeMonths, int MaxAgeMonths);
+
+    // A third-party operator that actually runs an event FCC merely advertises.
+    // NameMatch is a case-insensitive substring of the event name. When an event
+    // matches, it's treated as not-free, priced at the operator's "from" rate,
+    // and its Source link points at the operator's booking page.
+    private record Operator(string NameMatch, string BookingUrl, decimal FromCost);
 
     public string SourceId => "tockify_fitzrovia";
     public string Category => Categories.Community;
@@ -87,17 +108,23 @@ public sealed class FitzroviaTockifyScraper : IScraper
                 var date = DateOnly.FromDateTime(localStart);
                 if (date > horizonEnd) continue;
 
+                var name = ev.Name ?? "Event";
+                var op = Operators.FirstOrDefault(
+                    o => name.Contains(o.NameMatch, StringComparison.OrdinalIgnoreCase));
                 yield return new EventOccurrence
                 {
                     // Tockify URLs end in ".../detail/{eventId}/{occurrenceMs}" — stable across runs.
+                    // ExternalKey stays keyed on the FCC URL even for operator
+                    // events, so the identity is unchanged; only the displayed
+                    // SourceUrl below swaps to the operator's booking page.
                     ExternalKey = $"{SourceId}:{ev.Url ?? $"{ev.Name}:{ev.StartDate.ToUnixTimeMilliseconds()}"}",
                     Source = SourceId,
                     Category = Category,
-                    SourceUrl = ev.Url,
+                    SourceUrl = op?.BookingUrl ?? ev.Url,
                     Date = date,
                     StartTime = TimeOnly.FromDateTime(localStart),
                     EndTime = ev.EndDate == default ? null : TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(ev.EndDate, London).DateTime),
-                    SessionName = ev.Name ?? "Event",
+                    SessionName = name,
                     SessionNotes = null,
                     VenueName = ev.Location?.Name ?? "Fitzrovia Community Centre",
                     VenueAddress = ev.Location?.Address is { } a
@@ -107,7 +134,10 @@ public sealed class FitzroviaTockifyScraper : IScraper
                     MinAgeMonths = session.MinAgeMonths,
                     MaxAgeMonths = session.MaxAgeMonths,
                     TermTimeOnly = false,
-                    IsFree = true,
+                    // FCC's own sessions are free; an operator-run event is not —
+                    // show the operator's "from" price instead.
+                    IsFree = op is null,
+                    Cost = op?.FromCost,
                     LastSeenAt = now,
                 };
             }
