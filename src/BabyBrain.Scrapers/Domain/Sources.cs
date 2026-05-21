@@ -12,6 +12,7 @@ public static class Sources
 {
     public static string Label(string sourceId) => sourceId switch
     {
+        "bach_to_baby"                   => "Bach to Baby",
         "barbican_parent_and_baby"       => "Barbican Centre",
         "better_talacre_soft_play"       => "Talacre Community Sports Centre",
         "british_museum_family"          => "British Museum",

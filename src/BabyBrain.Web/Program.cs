@@ -1,4 +1,5 @@
 using BabyBrain.Scrapers;
+using BabyBrain.Scrapers.BachToBaby;
 using BabyBrain.Scrapers.Barbican;
 using BabyBrain.Scrapers.Better;
 using BabyBrain.Scrapers.BritishMuseum;
@@ -264,6 +265,11 @@ builder.Services.AddHttpClient<MwHealthClassesScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<MwHealthClassesScraper>());
+
+// Bach to Baby classical concerts for babies/families. The site's WAF
+// fingerprints and blocks .NET's HTTP client, so this scraper goes through
+// Playwright (a real browser) like the Cloudflare-fronted sources.
+builder.Services.AddScoped<IScraper, BachToBabyConcertsScraper>();
 
 builder.Services.AddHostedService<DailyScrapeService>();
 

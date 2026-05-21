@@ -18,17 +18,24 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
 
     public PlaywrightFetcher(IHtmlArchive archive) => _archive = archive;
 
+    // Default UA for rendered fetches. Overridable per-call via the userAgent
+    // argument — some sites block specific UA strings (Bach to Baby's WAF 403s
+    // a stock Chrome UA).
+    private const string DefaultUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
     public async Task<string> FetchRenderedHtmlAsync(
         string url,
         string waitForSelector,
         WaitForSelectorState waitState = WaitForSelectorState.Visible,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? userAgent = null)
     {
         await EnsureBrowserAsync(ct);
 
         var context = await _browser!.NewContextAsync(new()
         {
-            UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            UserAgent = userAgent ?? DefaultUserAgent,
             Locale = "en-GB",
         });
         try
