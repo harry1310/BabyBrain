@@ -7,6 +7,7 @@
     var radii = new[] { ("", "Any distance"), ("0.5", "½ mile"), ("1", "1 mile"), ("2", "2 miles"), ("3", "3 miles") };
     var currentRadius = Model.Filter.Radius?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
     var inv = System.Globalization.CultureInfo.InvariantCulture;
+    var hasOriginCoords = Model.Filter.OriginLat is not null && Model.Filter.OriginLng is not null;
 }
 
 <h1 class="mb-4">What's on for little ones</h1>
@@ -41,12 +42,14 @@
                     <option value="@val" selected="@(val == currentRadius ? "selected" : null)">@label</option>
                 }
             </select>
-            <input type="text" name="originPostcode" id="originPostcode" value="@Model.Filter.OriginPostcode"
-                   maxlength="10" class="form-control" placeholder="Your postcode" style="max-width:11rem"
+            <input type="text" name="originPostcode" id="originPostcode"
+                   value="@(hasOriginCoords ? "Current location" : Model.Filter.OriginPostcode)"
+                   readonly="@(hasOriginCoords ? "readonly" : null)"
+                   maxlength="32" class="form-control" placeholder="Your postcode" style="max-width:11rem"
                    autocomplete="postal-code" />
             <button type="button" id="useLocationBtn" class="btn btn-outline-secondary">📍 Use my location</button>
         </div>
-        <div class="form-text">Pick a distance, then enter your postcode (or use your location) to only see events near you.</div>
+        <div class="form-text">Pick a distance, then enter your postcode (or use your location) and press Search to only see events near you.</div>
         <div id="locationMsg" class="form-text text-primary"></div>
         @* Browser geolocation drops its coordinates here; typing a postcode clears them. *@
         <input type="hidden" name="originLat" id="originLat" value="@(Model.Filter.OriginLat?.ToString(inv))" />
@@ -67,14 +70,26 @@
 
 <script>
 (function () {
-    // "Use my location" → browser geolocation → stash coords in the hidden
-    // fields and submit. Typing a postcode supersedes any captured coords.
+    // "Use my location" captures coordinates and shows "Current location" in
+    // the postcode box, but does NOT search — the visitor presses Search like
+    // every other filter. Clicking (or typing in) the box drops the captured
+    // location so a postcode can be entered instead.
+    var LOCATION_LABEL = 'Current location';
     var btn = document.getElementById('useLocationBtn');
     var latEl = document.getElementById('originLat');
     var lngEl = document.getElementById('originLng');
     var pcEl = document.getElementById('originPostcode');
     var msgEl = document.getElementById('locationMsg');
-    if (!btn || !latEl || !lngEl) return;
+    var form = btn ? btn.form : null;
+    if (!btn || !latEl || !lngEl || !pcEl || !form) return;
+
+    function enterPostcodeMode() {
+        latEl.value = '';
+        lngEl.value = '';
+        pcEl.value = '';
+        pcEl.readOnly = false;
+        if (msgEl) msgEl.textContent = '';
+    }
 
     btn.addEventListener('click', function () {
         if (!navigator.geolocation) {
@@ -85,10 +100,13 @@
         btn.disabled = true;
         navigator.geolocation.getCurrentPosition(
             function (pos) {
+                btn.disabled = false;
                 latEl.value = pos.coords.latitude;
                 lngEl.value = pos.coords.longitude;
-                if (pcEl) pcEl.value = '';
-                btn.form.submit();
+                // Show it in the box, but wait for Search — don't auto-submit.
+                pcEl.value = LOCATION_LABEL;
+                pcEl.readOnly = true;
+                if (msgEl) msgEl.textContent = 'Got your location — press Search to use it.';
             },
             function (err) {
                 btn.disabled = false;
@@ -102,12 +120,23 @@
         );
     });
 
-    if (pcEl) {
-        pcEl.addEventListener('input', function () {
-            latEl.value = '';
-            lngEl.value = '';
-        });
-    }
+    // Clicking the box while it shows "Current location" clears it for typing.
+    pcEl.addEventListener('mousedown', function () {
+        if (pcEl.readOnly) enterPostcodeMode();
+    });
+    // Same for a keyboard user — any key except Tab starts a fresh postcode.
+    pcEl.addEventListener('keydown', function (ev) {
+        if (pcEl.readOnly && ev.key !== 'Tab') enterPostcodeMode();
+    });
+    // Typing a postcode supersedes any captured coordinates.
+    pcEl.addEventListener('input', function () {
+        latEl.value = '';
+        lngEl.value = '';
+    });
+    // Coordinates carry the location — don't also submit the label as a postcode.
+    form.addEventListener('submit', function () {
+        if (latEl.value && lngEl.value) pcEl.value = '';
+    });
 })();
 </script>
 
