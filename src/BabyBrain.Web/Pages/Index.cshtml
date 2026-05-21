@@ -3,7 +3,10 @@
 @model IndexModel
 @{
     ViewData["Title"] = "Find baby & toddler events";
-    var ranges = new[] { ("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("custom", "Pick a date") };
+    var ranges = new[] { ("today", "Today"), ("tomorrow", "Tomorrow"), ("week", "This week"), ("nextweek", "Next week"), ("custom", "Pick a date") };
+    var radii = new[] { ("", "Any distance"), ("0.5", "½ mile"), ("1", "1 mile"), ("2", "2 miles"), ("3", "3 miles") };
+    var currentRadius = Model.Filter.Radius?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
 }
 
 <h1 class="mb-4">What's on for little ones</h1>
@@ -29,6 +32,27 @@
                class="form-control" style="max-width:14rem" />
     </div>
 
+    <div class="mb-3">
+        <label class="form-label fw-semibold">Distance from you</label>
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <select name="radius" id="radius" class="form-select" style="max-width:11rem">
+                @foreach (var (val, label) in radii)
+                {
+                    <option value="@val" selected="@(val == currentRadius ? "selected" : null)">@label</option>
+                }
+            </select>
+            <input type="text" name="originPostcode" id="originPostcode" value="@Model.Filter.OriginPostcode"
+                   maxlength="10" class="form-control" placeholder="Your postcode" style="max-width:11rem"
+                   autocomplete="postal-code" />
+            <button type="button" id="useLocationBtn" class="btn btn-outline-secondary">📍 Use my location</button>
+        </div>
+        <div class="form-text">Pick a distance, then enter your postcode (or use your location) to only see events near you.</div>
+        <div id="locationMsg" class="form-text text-primary"></div>
+        @* Browser geolocation drops its coordinates here; typing a postcode clears them. *@
+        <input type="hidden" name="originLat" id="originLat" value="@(Model.Filter.OriginLat?.ToString(inv))" />
+        <input type="hidden" name="originLng" id="originLng" value="@(Model.Filter.OriginLng?.ToString(inv))" />
+    </div>
+
     <div class="row g-3 align-items-end">
         <div class="col-md-6">
             <label for="ageMonths" class="form-label fw-semibold">How old is your child? <span class="text-muted">(months)</span></label>
@@ -40,6 +64,57 @@
         </div>
     </div>
 </form>
+
+<script>
+(function () {
+    // "Use my location" → browser geolocation → stash coords in the hidden
+    // fields and submit. Typing a postcode supersedes any captured coords.
+    var btn = document.getElementById('useLocationBtn');
+    var latEl = document.getElementById('originLat');
+    var lngEl = document.getElementById('originLng');
+    var pcEl = document.getElementById('originPostcode');
+    var msgEl = document.getElementById('locationMsg');
+    if (!btn || !latEl || !lngEl) return;
+
+    btn.addEventListener('click', function () {
+        if (!navigator.geolocation) {
+            if (msgEl) msgEl.textContent = "This browser can't share your location — type a postcode instead.";
+            return;
+        }
+        if (msgEl) msgEl.textContent = 'Getting your location…';
+        btn.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+            function (pos) {
+                latEl.value = pos.coords.latitude;
+                lngEl.value = pos.coords.longitude;
+                if (pcEl) pcEl.value = '';
+                btn.form.submit();
+            },
+            function (err) {
+                btn.disabled = false;
+                if (msgEl) {
+                    msgEl.textContent = (err && err.code === 1)
+                        ? 'Location permission denied — type a postcode instead.'
+                        : "Couldn't get your location — type a postcode instead.";
+                }
+            },
+            { timeout: 10000, maximumAge: 300000 }
+        );
+    });
+
+    if (pcEl) {
+        pcEl.addEventListener('input', function () {
+            latEl.value = '';
+            lngEl.value = '';
+        });
+    }
+})();
+</script>
+
+@if (!string.IsNullOrEmpty(Model.DistanceNote))
+{
+    <div class="alert alert-info py-2 small">@Model.DistanceNote</div>
+}
 
 @if (Model.Results.Count == 0)
 {

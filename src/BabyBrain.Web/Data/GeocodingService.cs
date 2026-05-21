@@ -85,6 +85,59 @@ public sealed class GeocodingService
         return resolved;
     }
 
+    // Resolves a single postcode — used for the search page's distance filter
+    // when a visitor types their own postcode. Checks the cache first; on a miss
+    // it calls postcodes.io's single-postcode endpoint and caches the result.
+    // Returns null for an unrecognised postcode or any network/parse failure,
+    // so the caller can fall back to showing all areas.
+    public async Task<(double Lat, double Lng)?> GeocodeOneAsync(string rawPostcode, CancellationToken ct = default)
+    {
+        var normalised = Geocode.Normalise(rawPostcode);
+        if (normalised.Length == 0) return null;
+
+        var cached = await _db.Geocodes.FirstOrDefaultAsync(g => g.Postcode == normalised, ct);
+        if (cached is not null) return (cached.Latitude, cached.Longitude);
+
+        try
+        {
+            // Don't let a slow upstream stall the page render.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var client = _http.CreateClient();
+            using var resp = await client.GetAsync(
+                $"https://api.postcodes.io/postcodes/{Uri.EscapeDataString(normalised)}", timeout.Token);
+            if (!resp.IsSuccessStatusCode) return null; // 404 = not a real postcode
+
+            using var stream = await resp.Content.ReadAsStreamAsync(timeout.Token);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: timeout.Token);
+            if (!doc.RootElement.TryGetProperty("result", out var r) || r.ValueKind == JsonValueKind.Null)
+                return null;
+            if (!r.TryGetProperty("latitude", out var latEl) || latEl.ValueKind == JsonValueKind.Null) return null;
+            if (!r.TryGetProperty("longitude", out var lngEl) || lngEl.ValueKind == JsonValueKind.Null) return null;
+
+            var lat = latEl.GetDouble();
+            var lng = lngEl.GetDouble();
+
+            _db.Geocodes.Add(new Geocode
+            {
+                Postcode = normalised,
+                Latitude = lat,
+                Longitude = lng,
+                ResolvedAt = DateTimeOffset.UtcNow,
+            });
+            try { await _db.SaveChangesAsync(ct); }
+            catch (DbUpdateException) { /* another request cached the same postcode first */ }
+
+            return (lat, lng);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or JsonException)
+        {
+            _logger.LogWarning(ex, "Single-postcode geocode failed for {Postcode}", normalised);
+            return null;
+        }
+    }
+
     private static IEnumerable<List<T>> Chunk<T>(IList<T> items, int size)
     {
         for (var i = 0; i < items.Count; i += size)
