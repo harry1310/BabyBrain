@@ -1,0 +1,171 @@
+@page
+@model BySourceModel
+@{
+    ViewData["Title"] = "Browse by source";
+}
+
+<h1 class="mb-4">Browse by source</h1>
+
+@if (Model.SourceOptions.Count == 0)
+{
+    <p class="text-muted">No events in the database yet. Try
+        <a asp-page="/Admin">running a scrape</a>.</p>
+}
+else
+{
+    <form method="get" class="card p-3 mb-4 bg-light">
+        <label for="source" class="form-label fw-semibold">Choose a source</label>
+        <div class="row g-2 align-items-end">
+            <div class="col-md-8">
+                <select id="source" name="source" class="form-select" onchange="this.form.submit()">
+                    <option value="">— Select a source —</option>
+                    @foreach (var s in Model.SourceOptions)
+                    {
+                        <option value="@s.Id" selected="@(s.Id == Model.SelectedSource ? "selected" : null)">@s.Label (@s.UpcomingCount)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-4">
+                <noscript><button type="submit" class="btn btn-primary w-100">Show events</button></noscript>
+            </div>
+        </div>
+    </form>
+
+    @if (Model.SelectedSource is null)
+    {
+        <p class="text-muted">Pick a source above to see its upcoming events, soonest first.</p>
+    }
+    else if (Model.Results.Count == 0)
+    {
+        <p class="text-muted">No upcoming events for this source right now.</p>
+    }
+    else
+    {
+        @* Cards aren't clickable here (no map), so drop the Index page's pointer cursor. *@
+        <style>.event-card { cursor: default !important; }</style>
+
+        <p class="text-muted">@Model.Results.Count upcoming event@(Model.Results.Count == 1 ? "" : "s").</p>
+
+        @foreach (var dayGroup in Model.Results.GroupBy(e => e.Date))
+        {
+            <h2 class="h5 mt-4 mb-2">@dayGroup.Key.ToString("dddd d MMMM")</h2>
+            @foreach (var ev in dayGroup)
+            {
+                @await Html.PartialAsync("_EventCard", ev)
+            }
+        }
+    }
+}
+
+@* Report-mistake modal — reused by the _EventCard partial's "Report mistake"
+   button. Self-contained here (the Index page carries its own copy). *@
+<div class="modal fade" id="bb-report-modal" tabindex="-1" aria-labelledby="bb-report-modal-title" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bb-report-modal-title">Report a mistake</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="bb-report-modal-message" class="mb-3">
+                    Click <strong>Report</strong> to tell babybrain.uk that the event details don't match the source event.
+                </p>
+                <label for="bb-report-field" class="form-label small mb-1">What's wrong?</label>
+                <select id="bb-report-field" class="form-select form-select-sm" required>
+                    <option value="" selected disabled>Select what's wrong…</option>
+                    <option value="age_range">Age range</option>
+                    <option value="time">Time</option>
+                    <option value="date">Date</option>
+                    <option value="location">Location</option>
+                    <option value="cost">Cost</option>
+                    <option value="title">Title</option>
+                    <option value="not_running">Event isn't running anymore</option>
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="bb-report-confirm" disabled>Report</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var modalEl = document.getElementById('bb-report-modal');
+    var fieldSelect = document.getElementById('bb-report-field');
+    var confirmBtn = document.getElementById('bb-report-confirm');
+    var msg = document.getElementById('bb-report-modal-message');
+    if (!modalEl || !fieldSelect || !confirmBtn || !msg) return;
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+        });
+    }
+
+    // Open the modal when a card's "Report mistake" button is clicked.
+    document.body.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('.bb-report-btn');
+        if (!btn) return;
+        var key = btn.getAttribute('data-event-key');
+        if (!key) return;
+        var title = btn.getAttribute('data-event-title') || '';
+        var venue = btn.getAttribute('data-event-venue') || '';
+        confirmBtn.setAttribute('data-event-key', key);
+        confirmBtn.disabled = true; // re-enabled once a field is picked
+        confirmBtn.textContent = 'Report';
+        confirmBtn.style.display = '';
+        fieldSelect.value = '';
+        fieldSelect.disabled = false;
+        var descriptor = (title && venue) ? (esc(title) + ' at ' + esc(venue))
+                       : title ? esc(title)
+                       : venue ? esc(venue)
+                       : 'this event';
+        msg.innerHTML = "Tell babybrain.uk that the event details for <strong>" +
+                        descriptor + "</strong> don't match the source event.";
+        if (window.bootstrap && bootstrap.Modal) {
+            bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        }
+    });
+
+    // Gate the Report button on a non-empty dropdown selection.
+    fieldSelect.addEventListener('change', function () {
+        confirmBtn.disabled = !fieldSelect.value;
+    });
+
+    // Confirm: POST the report, then show a brief result and auto-close.
+    confirmBtn.addEventListener('click', function () {
+        var key = confirmBtn.getAttribute('data-event-key');
+        var field = fieldSelect.value;
+        if (!key || !field) return;
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Reporting…';
+        fetch('/api/report-event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ externalKey: key, reportedField: field })
+        }).then(function (r) {
+            if (!r.ok) {
+                msg.innerHTML = '<div class="alert alert-warning mb-0">Sorry, that didn\'t go through. Try again later.</div>';
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = 'Report';
+                return;
+            }
+            msg.innerHTML = '<div class="alert alert-success mb-0">Reported — thanks. We\'ll take a look.</div>';
+            confirmBtn.style.display = 'none';
+            fieldSelect.disabled = true;
+            setTimeout(function () {
+                if (window.bootstrap && bootstrap.Modal) {
+                    bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+                }
+                confirmBtn.style.display = '';
+                fieldSelect.disabled = false;
+            }, 1500);
+        }).catch(function () {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Report';
+        });
+    });
+})();
+</script>
