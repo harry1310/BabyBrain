@@ -106,34 +106,56 @@ public sealed class VaEarlyYearsScraper : IScraper
         var windowEnd = seriesLast > to ? to : seriesLast;
 
         var description = article.QuerySelector("meta[itemprop='description']")?.GetAttribute("content")?.Trim();
-        var (minAge, maxAge) = TextParsing.ParseAgeRange((name + " " + description) ?? name);
 
         var href = article.QuerySelector("a.b-event-teaser__link")?.GetAttribute("href") ?? "";
         var url = href.StartsWith("http") ? href : Origin + href;
         var eventId = ExtractEventId(href);
 
-        // Some listing cards omit the description meta entirely (e.g. Rhythm Makers
-        // n3zEzkz33J7), leaving us with nothing to parse age from. Fall back to the
-        // detail page's <meta name="description"> which V&A populates more reliably
-        // ("Free, informal session for families with children aged 2-5"). Only fire
-        // when listing parse came up empty — most cards have what we need locally.
+        var isSeries = seriesFirst != seriesLast;
+
+        // A series' real session dates aren't in the listing — it carries only a
+        // first + last date. They ARE enumerated on the event's detail page, so
+        // fetch it once (and reuse the HTML for the age fallback below).
+        string? detailHtml = null;
+        if (isSeries && !string.IsNullOrEmpty(url))
+            detailHtml = await TryFetchAsync(url, ct);
+
+        var (minAge, maxAge) = TextParsing.ParseAgeRange((name + " " + description) ?? name);
+
+        // Some listing cards omit the description meta entirely (e.g. Rhythm
+        // Makers n3zEzkz33J7), leaving nothing to parse age from. Fall back to
+        // the detail page's <meta name="description">, which V&A populates more
+        // reliably ("…for families with children aged 2-5").
         if (minAge is null && maxAge is null && !string.IsNullOrEmpty(url))
         {
-            var detailDesc = await TryFetchDetailDescriptionAsync(url, ct);
+            var detailForAge = detailHtml ?? await TryFetchAsync(url, ct);
+            var detailDesc = detailForAge is null ? null : ExtractMetaDescription(detailForAge);
             if (!string.IsNullOrEmpty(detailDesc))
-            {
                 (minAge, maxAge) = TextParsing.ParseAgeRange(name + " " + detailDesc);
-            }
         }
 
         var venue = ResolveVenue(li.GetAttribute("data-wo-venue"));
         var notes = string.IsNullOrEmpty(description) ? null : Truncate(description, 400);
 
-        // One-off (start and end on same calendar day) → single row.
-        // Series (start < end) → weekly cadence on seriesFirst's day-of-week.
-        var dates = seriesFirst == seriesLast
-            ? new[] { seriesFirst }.Where(d => d >= windowStart && d <= windowEnd)
-            : TextParsing.WeeklyDatesInWindow(seriesFirst.DayOfWeek, windowStart, windowEnd);
+        // One-off (start and end on the same calendar day) → a single row.
+        // Series → the genuine session dates enumerated on the detail page. V&A
+        // series run varied cadences (twice-weekly, fortnightly) that a weekly
+        // guess gets wrong; if the detail page can't be read, fall back to that
+        // guess on seriesFirst's day-of-week rather than dropping the event.
+        IEnumerable<DateOnly> dates;
+        if (!isSeries)
+        {
+            dates = new[] { seriesFirst }.Where(d => d >= windowStart && d <= windowEnd);
+        }
+        else
+        {
+            var sessionDates = detailHtml is null
+                ? new List<DateOnly>()
+                : ExtractSessionDates(detailHtml, seriesFirst, seriesLast);
+            dates = sessionDates.Count > 0
+                ? sessionDates.Where(d => d >= windowStart && d <= windowEnd)
+                : TextParsing.WeeklyDatesInWindow(seriesFirst.DayOfWeek, windowStart, windowEnd);
+        }
 
         var rows = new List<EventOccurrence>();
         foreach (var date in dates)
@@ -162,22 +184,61 @@ public sealed class VaEarlyYearsScraper : IScraper
         return rows;
     }
 
-    private async Task<string?> TryFetchDetailDescriptionAsync(string url, CancellationToken ct)
+    private async Task<string?> TryFetchAsync(string url, CancellationToken ct)
     {
-        try
-        {
-            var html = await _http.GetStringAsync(url, ct);
-            // Lightweight regex parse — we just want the meta description content
-            // (a short marketing string). Pulling AngleSharp in for one element
-            // would more than double the work per detail page.
-            var m = Regex.Match(html, @"<meta\s+name=""description""\s+content=""([^""]*)""", RegexOptions.IgnoreCase);
-            return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
-        }
-        catch
-        {
-            return null;
-        }
+        try { return await _http.GetStringAsync(url, ct); }
+        catch { return null; }
     }
+
+    // The detail page's <meta name="description"> — a short marketing string,
+    // used as an age-range fallback. Regex rather than AngleSharp: it's one
+    // element and we may already be regex-scanning this HTML for session dates.
+    private static string? ExtractMetaDescription(string html)
+    {
+        var m = Regex.Match(html, @"<meta\s+name=""description""\s+content=""([^""]*)""", RegexOptions.IgnoreCase);
+        return m.Success ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;
+    }
+
+    // V&A detail pages enumerate each remaining session as "Friday, 22 May"
+    // (weekday, day, month — no year). Pulling those out gives the true session
+    // list whatever the cadence. The year is inferred from the series' known
+    // [first, last] span; matches outside that span (e.g. a related event) are
+    // rejected. Returns distinct dates, ascending.
+    private static List<DateOnly> ExtractSessionDates(string html, DateOnly seriesFirst, DateOnly seriesLast)
+    {
+        var dates = new SortedSet<DateOnly>();
+        foreach (Match m in Regex.Matches(html,
+            @"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})\s+([A-Za-z]+)"))
+        {
+            if (!int.TryParse(m.Groups[1].Value, out var day)) continue;
+            if (ParseMonth(m.Groups[2].Value) is not int month) continue;
+            foreach (var year in new[] { seriesFirst.Year, seriesLast.Year })
+            {
+                DateOnly d;
+                try { d = new DateOnly(year, month, day); }
+                catch (ArgumentOutOfRangeException) { continue; }
+                if (d >= seriesFirst && d <= seriesLast) { dates.Add(d); break; }
+            }
+        }
+        return dates.ToList();
+    }
+
+    private static int? ParseMonth(string s) => s.Trim().ToLowerInvariant() switch
+    {
+        "january" or "jan" => 1,
+        "february" or "feb" => 2,
+        "march" or "mar" => 3,
+        "april" or "apr" => 4,
+        "may" => 5,
+        "june" or "jun" => 6,
+        "july" or "jul" => 7,
+        "august" or "aug" => 8,
+        "september" or "sep" or "sept" => 9,
+        "october" or "oct" => 10,
+        "november" or "nov" => 11,
+        "december" or "dec" => 12,
+        _ => null,
+    };
 
     private record Venue(string Name, string Address, string Postcode);
 
