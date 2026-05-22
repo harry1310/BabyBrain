@@ -28,6 +28,11 @@ public sealed class BritishMuseumScraper : IScraper
     private const int TeaserFetchAttempts = 2;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
+    // BabyBrain covers under-5s. The BM "Family events" carousel also lists
+    // school-age activities; an event whose stated minimum age is at or above
+    // this (5 years, in months) is dropped.
+    private const int UnderFiveCutoffMonths = 60;
+
     public string SourceId => "british_museum_family";
     public string Category => Categories.Museum;
 
@@ -136,6 +141,11 @@ public sealed class BritishMuseumScraper : IScraper
 
         var vid = container.GetAttribute("data-vid") ?? Slug(teaser.Url);
         var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Summary);
+
+        // Skip school-age events (e.g. the 8-15 sleepover). An event with no
+        // stated age is kept — most BM family activities welcome all ages,
+        // toddlers included.
+        if (minAge is int min && min >= UnderFiveCutoffMonths) yield break;
 
         // The accordion is a flat sequence of: <h3 .accordion__heading><button><span>May 2026</span>…
         // followed by <div .accordion__content> containing <dl .occurrence-list>. Months can repeat
