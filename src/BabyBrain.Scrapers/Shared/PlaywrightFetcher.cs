@@ -24,12 +24,18 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
     private const string DefaultUserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+    // Default time to wait for waitForSelector. Overridable per-call: heavy
+    // JS-rendered pages can need much longer on the small production VPS
+    // (the British Museum detail pages, for one).
+    private const int DefaultSelectorTimeoutMs = 30_000;
+
     public async Task<string> FetchRenderedHtmlAsync(
         string url,
         string waitForSelector,
         WaitForSelectorState waitState = WaitForSelectorState.Visible,
         CancellationToken ct = default,
-        string? userAgent = null)
+        string? userAgent = null,
+        int? selectorTimeoutMs = null)
     {
         await EnsureBrowserAsync(ct);
 
@@ -45,7 +51,11 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
             // (Southbank Centre, etc.) never reach NetworkIdle. The WaitForSelector
             // below is the real readiness check for the content we care about.
             await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.Load, Timeout = 60_000 });
-            await page.WaitForSelectorAsync(waitForSelector, new() { Timeout = 30_000, State = waitState });
+            await page.WaitForSelectorAsync(waitForSelector, new()
+            {
+                Timeout = selectorTimeoutMs ?? DefaultSelectorTimeoutMs,
+                State = waitState,
+            });
             var html = await page.ContentAsync();
             await _archive.SaveAsync(url, html, ct);
             return html;

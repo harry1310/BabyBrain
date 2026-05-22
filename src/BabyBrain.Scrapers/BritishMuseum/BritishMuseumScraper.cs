@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -33,6 +34,12 @@ public sealed class BritishMuseumScraper : IScraper
     // drops a whole event (this is what made the live row count lurch to 2).
     private const int TeaserFetchAttempts = 2;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
+
+    // The BM detail pages JS-render their occurrence list. That render is ~5s
+    // locally but exceeds the default 30s wait on the 2-vCPU production VPS
+    // (issue #7: both detail fetches timed out at 30s). Give it a generous
+    // ceiling — slow is fine for a daily background scrape; failing isn't.
+    private const int DetailWaitMs = 90_000;
 
     // BabyBrain covers under-5s. The BM "Family events" carousel also lists
     // school-age activities; an event whose stated minimum age is at or above
@@ -93,15 +100,19 @@ public sealed class BritishMuseumScraper : IScraper
             {
                 try
                 {
+                    var sw = Stopwatch.StartNew();
                     var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
                         teaser.Url,
                         "[data-js-event-occurrences] .occurrence-list__item",
                         WaitForSelectorState.Attached,
-                        ct);
+                        ct,
+                        selectorTimeoutMs: DetailWaitMs);
+                    sw.Stop();
                     var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
                     var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
                     rows.AddRange(teaserRows);
-                    diag.Append($"[{teaser.Title}] OK ({detailHtml.Length} chars): {note}. ");
+                    diag.Append($"[{teaser.Title}] OK in {sw.ElapsedMilliseconds}ms " +
+                                $"({detailHtml.Length} chars): {note}. ");
                     teaserFailure = null;
                     break;
                 }
