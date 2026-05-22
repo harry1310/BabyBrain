@@ -27,12 +27,6 @@ public sealed class VaEarlyYearsScraper : IScraper
     public string SourceId => "va_early_years";
     public string Category => Categories.Museum;
 
-    // TryParseDateTime reads the V&A's "+0100"/"+0000" offset correctly, but
-    // DateTimeOffset.LocalDateTime then resolves against the *machine's* TZ.
-    // The production container runs UTC, so BST events shifted an hour early.
-    // Convert through London explicitly, matching Barbican / Wigmore Hall.
-    private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
-
     private readonly PlaywrightFetcher _fetcher;
     private readonly HttpClient _http;
 
@@ -82,20 +76,27 @@ public sealed class VaEarlyYearsScraper : IScraper
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(startRaw)) return Array.Empty<EventOccurrence>();
 
         if (!TryParseDateTime(startRaw, out var start)) return Array.Empty<EventOccurrence>();
-        var startLondon = TimeZoneInfo.ConvertTime(start, London).DateTime;
-        var seriesFirst = DateOnly.FromDateTime(startLondon);
-        var startTime = TimeOnly.FromDateTime(startLondon);
+        // V&A's listing microdata is an hour out: it encodes each event's true
+        // local clock time as a UTC instant of the same reading — e.g. an 11:30
+        // session is published as the instant 11:30Z (tagged variously +0000 or
+        // +0100). UtcDateTime recovers that instant = the real local time.
+        // .DateTime keeps the offset-shifted wall clock and ConvertTime adds a
+        // spurious BST hour — both land an hour late. The event detail pages
+        // confirm the times this produces.
+        var startLocal = start.UtcDateTime;
+        var seriesFirst = DateOnly.FromDateTime(startLocal);
+        var startTime = TimeOnly.FromDateTime(startLocal);
 
         var endRaw = article.QuerySelector("meta[itemprop='endDate']")?.GetAttribute("content")?.Trim();
         DateOnly seriesLast = seriesFirst;
         TimeOnly? sessionEndTime = null;
         if (!string.IsNullOrEmpty(endRaw) && TryParseDateTime(endRaw, out var end))
         {
-            var endLondon = TimeZoneInfo.ConvertTime(end, London).DateTime;
-            seriesLast = DateOnly.FromDateTime(endLondon);
+            var endLocal = end.UtcDateTime; // see startLocal — V&A's feed runs an hour late
+            seriesLast = DateOnly.FromDateTime(endLocal);
             // The schema.org endDate carries the *last session's* end clock-time,
             // which is the same slot every week — apply it to every occurrence.
-            sessionEndTime = TimeOnly.FromDateTime(endLondon);
+            sessionEndTime = TimeOnly.FromDateTime(endLocal);
         }
 
         // Drop the card entirely if the whole series sits outside the horizon.
