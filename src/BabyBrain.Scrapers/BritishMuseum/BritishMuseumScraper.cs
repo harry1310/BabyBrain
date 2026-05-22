@@ -1,9 +1,11 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using AngleSharp;
 using AngleSharp.Dom;
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Scrapers.Shared;
+using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
 
 namespace BabyBrain.Scrapers.BritishMuseum;
@@ -11,9 +13,13 @@ namespace BabyBrain.Scrapers.BritishMuseum;
 // Source: https://www.britishmuseum.org/visit/family-visits
 // The "Family events" section on the hub page is a 3-item carousel of
 // curated upcoming family activities. Each card links to /events/<slug>; the
-// detail page server-side-renders the actual dates and times into an
-// occurrence-list accordion. We walk hub → detail → emit one row per
-// (date, start time).
+// detail page renders the actual dates and times into an occurrence-list
+// accordion. We walk hub → detail → emit one row per (date, start time).
+//
+// This scraper has been flaky on the small production VPS, so it carries
+// verbose diagnostics: every run logs a per-teaser breakdown, and a run that
+// ends with 0 rows throws with that same breakdown as the message — which
+// lands in the scrape-failure GitHub issue, where it can actually be read.
 public sealed class BritishMuseumScraper : IScraper
 {
     private const string HubUrl = "https://www.britishmuseum.org/visit/family-visits";
@@ -37,8 +43,13 @@ public sealed class BritishMuseumScraper : IScraper
     public string Category => Categories.Museum;
 
     private readonly PlaywrightFetcher _fetcher;
+    private readonly ILogger<BritishMuseumScraper> _logger;
 
-    public BritishMuseumScraper(PlaywrightFetcher fetcher) => _fetcher = fetcher;
+    public BritishMuseumScraper(PlaywrightFetcher fetcher, ILogger<BritishMuseumScraper> logger)
+    {
+        _fetcher = fetcher;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
@@ -46,73 +57,76 @@ public sealed class BritishMuseumScraper : IScraper
         var horizonEnd = today.AddDays(horizonDays);
         var now = DateTimeOffset.UtcNow;
         var rows = new List<EventOccurrence>();
+        var diag = new StringBuilder();
 
         // Hub page: pull event card links from the #family-events section.
         // Wait Attached, not Visible — the carousel anchors are in the DOM
-        // before the carousel paints, and we only read the markup. Visible
-        // sometimes timed out on the production VPS even though the data
-        // was present, leading to a 0-event success.
-        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(
-            HubUrl,
-            "a.teaser__anchor[href^='/events/']",
-            WaitForSelectorState.Attached,
-            ct);
+        // before the carousel paints, and we only read the markup.
+        string hubHtml;
+        try
+        {
+            hubHtml = await _fetcher.FetchRenderedHtmlAsync(
+                HubUrl, "a.teaser__anchor[href^='/events/']", WaitForSelectorState.Attached, ct);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"British Museum hub fetch failed: {ex.GetType().Name}: {ex.Message}", ex);
+        }
+
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
         var teasers = ExtractTeasers(hub).ToList();
+        diag.Append($"hub {hubHtml.Length} chars, {teasers.Count} teaser(s). ");
 
-        // If every teaser fetch ends in a swallowed timeout we'd return 0 rows
-        // with no error — indistinguishable from a real "no events" result.
-        // Keep skipping individual non-listing pages, but remember the last
-        // exception so we can rethrow if EVERY teaser fetch failed.
-        var attempted = 0;
-        Exception? lastFailure = null;
         foreach (var teaser in teasers)
         {
             ct.ThrowIfCancellationRequested();
-            attempted++;
 
             // Retry the detail fetch: a transient render timeout shouldn't cost
-            // us the whole event. A page that genuinely has no occurrence list
-            // (sold-out / draft / festival landing) will fail every attempt —
-            // that just wastes one extra fetch, which is the right trade.
+            // us the whole event. Wait for an actual occurrence row, not just
+            // the [data-js-event-occurrences] container — that shell attaches
+            // before its accordion rows render in, and snapshotting the gap
+            // yields an empty parse. Attached, not Visible: the rows sit inside
+            // collapsed accordions, so they're in the DOM but not painted.
+            Exception? teaserFailure = null;
             for (var attempt = 1; attempt <= TeaserFetchAttempts; attempt++)
             {
                 try
                 {
-                    // Wait for an actual occurrence row, not just the
-                    // [data-js-event-occurrences] container. The container shell
-                    // attaches before its accordion rows render in; on the slow
-                    // production VPS we were snapshotting that gap and parsing an
-                    // empty list — every teaser yielding 0 → a 0-event "success"
-                    // that the orchestrator (rightly) treats as a failure.
-                    // Attached, not Visible: the rows sit inside collapsed
-                    // accordions, so they're in the DOM but not painted.
                     var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
                         teaser.Url,
                         "[data-js-event-occurrences] .occurrence-list__item",
                         WaitForSelectorState.Attached,
                         ct);
                     var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
-                    rows.AddRange(BuildOccurrences(detail, teaser, today, horizonEnd, now));
-                    break; // succeeded — on to the next teaser
+                    var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
+                    rows.AddRange(teaserRows);
+                    diag.Append($"[{teaser.Title}] OK ({detailHtml.Length} chars): {note}. ");
+                    teaserFailure = null;
+                    break;
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    // Skip this teaser if it never came good; the all-fail check
-                    // below still surfaces a wholesale breakage.
-                    lastFailure = ex;
+                    teaserFailure = ex;
                     if (attempt < TeaserFetchAttempts)
                         await Task.Delay(RetryDelay, ct);
                 }
             }
+            if (teaserFailure is not null)
+                diag.Append($"[{teaser.Title}] FETCH FAILED x{TeaserFetchAttempts}: " +
+                            $"{teaserFailure.GetType().Name}: {teaserFailure.Message}. ");
         }
 
-        if (rows.Count == 0 && attempted > 0 && lastFailure is not null)
-            throw new InvalidOperationException(
-                $"All {attempted} British Museum family event detail fetches failed; last error: {lastFailure.Message}",
-                lastFailure);
+        var summary = $"British Museum scrape: {rows.Count} row(s). {diag}".TrimEnd();
 
+        // 0 rows is treated as a failure by the orchestrator anyway; throw with
+        // the full breakdown so the *reason* reaches the GitHub issue, not just
+        // a bare "returned 0 events".
+        if (rows.Count == 0)
+            throw new InvalidOperationException(summary);
+
+        _logger.LogInformation("{Summary}", summary);
         return rows;
     }
 
@@ -142,44 +156,54 @@ public sealed class BritishMuseumScraper : IScraper
         }
     }
 
-    private IEnumerable<EventOccurrence> BuildOccurrences(IDocument detail, Teaser teaser, DateOnly from, DateOnly to, DateTimeOffset now)
+    // Builds the rows for one event's detail page, plus a short note describing
+    // what was seen — so a 0-row outcome explains itself in the run diagnostics.
+    private (List<EventOccurrence> Rows, string Note) BuildOccurrences(
+        IDocument detail, Teaser teaser, DateOnly from, DateOnly to, DateTimeOffset now)
     {
+        var rows = new List<EventOccurrence>();
+
         var container = detail.QuerySelector("[data-js-event-occurrences]");
-        if (container is null) yield break;
+        if (container is null)
+            return (rows, "no [data-js-event-occurrences] container");
 
         var vid = container.GetAttribute("data-vid") ?? Slug(teaser.Url);
         var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Summary);
 
         // Skip school-age events (e.g. the 8-15 sleepover). An event with no
-        // stated age is kept — most BM family activities welcome all ages,
-        // toddlers included.
-        if (minAge is int min && min >= UnderFiveCutoffMonths) yield break;
+        // stated age is kept — most BM family activities welcome all ages.
+        if (minAge is int min && min >= UnderFiveCutoffMonths)
+            return (rows, $"age-filtered ({min}mo+, school-age)");
 
         // The accordion is a flat sequence of: <h3 .accordion__heading><button><span>May 2026</span>…
         // followed by <div .accordion__content> containing <dl .occurrence-list>. Months can repeat
         // across an event so we iterate the accordion items in order.
+        int accordionItems = 0, occurrences = 0, monthUnparsed = 0, dayUnparsed = 0, outOfHorizon = 0, noTime = 0;
         foreach (var item in container.QuerySelectorAll(".accordion__item"))
         {
+            accordionItems++;
             var monthLabel = item.QuerySelector(".accordion__button span")?.TextContent.Trim();
-            if (!TryParseMonthYear(monthLabel, out var year, out var month)) continue;
+            if (!TryParseMonthYear(monthLabel, out var year, out var month)) { monthUnparsed++; continue; }
 
             foreach (var occurrence in item.QuerySelectorAll(".occurrence-list__item"))
             {
+                occurrences++;
                 var dayLabel = occurrence.QuerySelector(".occurrence-list__days")?.TextContent.Trim();
                 var day = ParseDayOfMonth(dayLabel);
-                if (day is null) continue;
+                if (day is null) { dayUnparsed++; continue; }
 
                 DateOnly date;
                 try { date = new DateOnly(year, month, day.Value); }
-                catch (ArgumentOutOfRangeException) { continue; }
-                if (date < from || date > to) continue;
+                catch (ArgumentOutOfRangeException) { dayUnparsed++; continue; }
+                if (date < from || date > to) { outOfHorizon++; continue; }
 
+                var before = rows.Count;
                 foreach (var timeEl in occurrence.QuerySelectorAll(".occurrence-list__time"))
                 {
                     var (start, end) = ParseTimeRange(timeEl.TextContent);
                     if (start is null) continue;
 
-                    yield return new EventOccurrence
+                    rows.Add(new EventOccurrence
                     {
                         ExternalKey = $"{SourceId}:{vid}:{date:yyyy-MM-dd}:{start:HHmm}",
                         Source = SourceId,
@@ -198,10 +222,18 @@ public sealed class BritishMuseumScraper : IScraper
                         TermTimeOnly = false,
                         IsFree = true,
                         LastSeenAt = now,
-                    };
+                    });
                 }
+                if (rows.Count == before) noTime++;
             }
         }
+
+        var note = $"{accordionItems} accordion item(s), {occurrences} occurrence(s) -> {rows.Count} row(s)"
+            + (monthUnparsed > 0 ? $"; {monthUnparsed} month-label unparsed" : "")
+            + (dayUnparsed > 0 ? $"; {dayUnparsed} day unparsed" : "")
+            + (outOfHorizon > 0 ? $"; {outOfHorizon} out-of-horizon" : "")
+            + (noTime > 0 ? $"; {noTime} with no parseable time" : "");
+        return (rows, note);
     }
 
     private static bool TryParseMonthYear(string? label, out int year, out int month)
