@@ -22,6 +22,12 @@ public sealed class BritishMuseumScraper : IScraper
     private const string Address = "Great Russell Street, London";
     private const string Postcode = "WC1B 3DG";
 
+    // Detail-page renders occasionally time out transiently on the small
+    // production VPS. Retry once before giving up — a swallowed miss silently
+    // drops a whole event (this is what made the live row count lurch to 2).
+    private const int TeaserFetchAttempts = 2;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
+
     public string SourceId => "british_museum_family";
     public string Category => Categories.Museum;
 
@@ -59,21 +65,33 @@ public sealed class BritishMuseumScraper : IScraper
         {
             ct.ThrowIfCancellationRequested();
             attempted++;
-            try
+
+            // Retry the detail fetch: a transient render timeout shouldn't cost
+            // us the whole event. A page that genuinely has no occurrence list
+            // (sold-out / draft / festival landing) will fail every attempt —
+            // that just wastes one extra fetch, which is the right trade.
+            for (var attempt = 1; attempt <= TeaserFetchAttempts; attempt++)
             {
-                var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
-                    teaser.Url,
-                    "[data-js-event-occurrences]",
-                    WaitForSelectorState.Attached,
-                    ct);
-                var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
-                rows.AddRange(BuildOccurrences(detail, teaser, today, horizonEnd, now));
-            }
-            catch (Exception ex)
-            {
-                // Detail pages without an occurrence list (e.g. sold-out, draft, festival landing
-                // pages) throw on the selector wait. Skip individually, but surface if ALL fail.
-                lastFailure = ex;
+                try
+                {
+                    var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
+                        teaser.Url,
+                        "[data-js-event-occurrences]",
+                        WaitForSelectorState.Attached,
+                        ct);
+                    var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
+                    rows.AddRange(BuildOccurrences(detail, teaser, today, horizonEnd, now));
+                    break; // succeeded — on to the next teaser
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // Skip this teaser if it never came good; the all-fail check
+                    // below still surfaces a wholesale breakage.
+                    lastFailure = ex;
+                    if (attempt < TeaserFetchAttempts)
+                        await Task.Delay(RetryDelay, ct);
+                }
             }
         }
 
