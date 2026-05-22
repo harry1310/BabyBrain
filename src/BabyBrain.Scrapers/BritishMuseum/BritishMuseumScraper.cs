@@ -79,9 +79,17 @@ public sealed class BritishMuseumScraper : IScraper
             {
                 try
                 {
+                    // Wait for an actual occurrence row, not just the
+                    // [data-js-event-occurrences] container. The container shell
+                    // attaches before its accordion rows render in; on the slow
+                    // production VPS we were snapshotting that gap and parsing an
+                    // empty list — every teaser yielding 0 → a 0-event "success"
+                    // that the orchestrator (rightly) treats as a failure.
+                    // Attached, not Visible: the rows sit inside collapsed
+                    // accordions, so they're in the DOM but not painted.
                     var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
                         teaser.Url,
-                        "[data-js-event-occurrences]",
+                        "[data-js-event-occurrences] .occurrence-list__item",
                         WaitForSelectorState.Attached,
                         ct);
                     var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
