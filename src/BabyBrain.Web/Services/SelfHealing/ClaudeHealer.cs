@@ -46,7 +46,7 @@ public sealed class ClaudeHealer : IClaudeHealer
         _logger = logger;
     }
 
-    public async Task<HealResult?> DiagnoseAsync(
+    public async Task<HealOutcome> DiagnoseAsync(
         string sourceId,
         string error,
         IReadOnlyList<HealPatch> currentFiles,
@@ -55,7 +55,7 @@ public sealed class ClaudeHealer : IClaudeHealer
         if (currentFiles.Count == 0)
         {
             _logger.LogWarning("ClaudeHealer called with no source files for {Source}", sourceId);
-            return null;
+            return HealOutcome.Failed("no_source_files");
         }
 
         try
@@ -82,7 +82,7 @@ public sealed class ClaudeHealer : IClaudeHealer
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Claude API call failed during heal of {Source}", sourceId);
-            return null;
+            return HealOutcome.Failed($"claude_api_threw:{ex.GetType().Name}");
         }
     }
 
@@ -139,7 +139,7 @@ public sealed class ClaudeHealer : IClaudeHealer
         },
     };
 
-    private HealResult? Parse(Message response, string sourceId)
+    private HealOutcome Parse(Message response, string sourceId)
     {
         ToolUseBlock? toolUse = null;
         foreach (var block in response.Content)
@@ -153,7 +153,7 @@ public sealed class ClaudeHealer : IClaudeHealer
         if (toolUse is null)
         {
             _logger.LogWarning("Claude response had no {Tool} tool call for {Source}", ToolName, sourceId);
-            return null;
+            return HealOutcome.Failed("no_tool_use_in_response");
         }
 
         var diagnosis = toolUse.Input.TryGetValue("diagnosis", out var diagEl) && diagEl.ValueKind == JsonValueKind.String
@@ -175,6 +175,16 @@ public sealed class ClaudeHealer : IClaudeHealer
             }
         }
 
-        return new HealResult(diagnosis, patches);
+        // The schema allows both fields to be empty, and the model does sometimes
+        // call the tool with diagnosis="" and patches=[] — usually when it judged
+        // the failure transient but didn't volunteer a sentence. Surface that
+        // explicitly so the issue comment names the cause.
+        if (string.IsNullOrWhiteSpace(diagnosis) && patches.Count == 0)
+        {
+            _logger.LogWarning("Claude returned {Tool} with empty diagnosis and no patches for {Source}", ToolName, sourceId);
+            return HealOutcome.Failed("empty_diagnosis_and_no_patches");
+        }
+
+        return HealOutcome.Success(new HealResult(diagnosis, patches));
     }
 }

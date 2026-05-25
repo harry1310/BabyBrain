@@ -41,27 +41,29 @@ public sealed class SelfHealingOrchestrator
         if (scraper is null)
         {
             _logger.LogWarning("Heal skipped: no scraper found for source {Source}", sourceId);
-            return HealAttemptResult.Empty;
+            return HealAttemptResult.Failed("no_scraper_for_source");
         }
 
         var sourcePath = SourceFilePathFor(scraper.GetType());
-        if (sourcePath is null) return HealAttemptResult.Empty;
+        if (sourcePath is null) return HealAttemptResult.Failed("source_path_unresolved");
 
         var sourceFile = await _sourceFetcher.FetchAsync(sourcePath, ct);
         if (sourceFile is null)
         {
             _logger.LogWarning("Heal skipped: could not fetch source for {Source} at {Path}", sourceId, sourcePath);
-            return HealAttemptResult.Empty;
+            return HealAttemptResult.Failed($"source_fetch_failed:{sourcePath}");
         }
 
-        var heal = await _healer.DiagnoseAsync(sourceId, error, new[] { sourceFile }, ct);
-        if (heal is null) return HealAttemptResult.Empty;
+        var outcome = await _healer.DiagnoseAsync(sourceId, error, new[] { sourceFile }, ct);
+        if (outcome.Result is null)
+            return HealAttemptResult.Failed(outcome.FailureReason ?? "unknown_healer_failure");
 
+        var heal = outcome.Result;
         if (heal.Patches.Count == 0)
         {
-            // Claude couldn't propose code changes (e.g. transient failure or
-            // not enough context). Diagnosis is still useful — caller will
-            // post it as a comment on the failure issue.
+            // Claude returned a diagnosis but no actionable code change (e.g.
+            // judged the failure transient). The caller posts the diagnosis as
+            // an issue comment.
             return new HealAttemptResult(heal.Diagnosis, PullRequestNumber: null);
         }
 
@@ -82,7 +84,14 @@ public sealed class SelfHealingOrchestrator
     }
 }
 
-public sealed record HealAttemptResult(string? Diagnosis, int? PullRequestNumber)
+// Reason carries a short token (e.g. "source_fetch_failed:...", "no_tool_use_in_response",
+// "empty_diagnosis_and_no_patches", "claude_api_threw:HttpRequestException") for
+// the cases where the orchestrator bailed without a usable diagnosis. It surfaces
+// in the GitHub issue comment so a future reader can tell which path fired
+// without having to grep server logs. Null on the happy paths (diagnosis-only or
+// PR-opened) where the Diagnosis field is the useful signal.
+public sealed record HealAttemptResult(string? Diagnosis, int? PullRequestNumber, string? Reason = null)
 {
     public static readonly HealAttemptResult Empty = new(null, null);
+    public static HealAttemptResult Failed(string reason) => new(null, null, reason);
 }

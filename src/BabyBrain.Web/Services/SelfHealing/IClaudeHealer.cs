@@ -8,7 +8,7 @@ namespace BabyBrain.Web.Services.SelfHealing;
 // stays disabled without throwing.
 public interface IClaudeHealer
 {
-    Task<HealResult?> DiagnoseAsync(
+    Task<HealOutcome> DiagnoseAsync(
         string sourceId,
         string error,
         IReadOnlyList<HealPatch> currentFiles,
@@ -17,6 +17,6 @@ public interface IClaudeHealer
 
 public sealed class NoopClaudeHealer : IClaudeHealer
 {
-    public Task<HealResult?> DiagnoseAsync(string sourceId, string error, IReadOnlyList<HealPatch> currentFiles, CancellationToken ct = default)
-        => Task.FromResult<HealResult?>(null);
+    public Task<HealOutcome> DiagnoseAsync(string sourceId, string error, IReadOnlyList<HealPatch> currentFiles, CancellationToken ct = default)
+        => Task.FromResult(HealOutcome.Failed("anthropic_api_key_not_configured"));
 }
