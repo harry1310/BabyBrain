@@ -9,7 +9,7 @@ Single-VPS deploy on Hetzner Cloud. ~€4.59/mo, all-in.
 - **OS:** Ubuntu 24.04 LTS
 - **Domain:** none for v1 — site reachable at `http://<server-ip>`. Add a domain + HTTPS later
 - **Admin auth:** HTTP basic auth on `/Admin`, credentials in env vars
-- **Scraping:** runs daily at 06:30 UTC as a background service inside the app — no cron job, no external trigger
+- **Scraping:** runs daily at 03:00 UTC as a background service inside the app — no cron job, no external trigger
 
 ---
 
@@ -88,7 +88,7 @@ Before you can deploy, I need to add to the repo:
 - A `Dockerfile` (multi-stage build, Playwright base image)
 - A `docker-compose.yml`
 - A `.dockerignore`
-- An `IHostedService` that runs the scrape daily at 06:30 UTC
+- An `IHostedService` that runs the scrape daily at 03:00 UTC
 - Basic auth middleware on `/Admin` reading `BABYBRAIN_ADMIN_USER` / `BABYBRAIN_ADMIN_PASSWORD` from env
 - A small refactor so the SQLite path is configurable via `BABYBRAIN_DB_PATH` (default `/data/babybrain.db` in container)
 
@@ -108,7 +108,7 @@ mkdir -p data
 # Create .env with your admin credentials (choose a strong password!)
 # BABYBRAIN_SCRAPE_ON_STARTUP=true → run a scrape immediately on container
 # start, useful right after a fresh deploy. Set to false (or omit) on subsequent
-# starts; the daily 06:30 UTC schedule will keep data fresh.
+# starts; the daily 03:00 UTC schedule will keep data fresh.
 cat > .env <<'EOF'
 BABYBRAIN_ADMIN_USER=harry
 BABYBRAIN_ADMIN_PASSWORD=replace-with-a-real-strong-password
@@ -139,7 +139,7 @@ Should load the search page. Try `/Admin` — browser will prompt for the creden
 
 ### 11. First scrape
 
-The first scheduled scrape will run at 06:30 UTC. If you want data right away, log into `/Admin` and click "Run all scrapers now". Wait ~6 minutes (same as locally — Cloudflare-challenged sites are slow).
+The first scheduled scrape will run at 03:00 UTC. If you want data right away, log into `/Admin` and click "Run all scrapers now". Wait ~6 minutes (same as locally — Cloudflare-challenged sites are slow).
 
 ### 12. Optional: a tiny firewall
 
