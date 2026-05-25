@@ -1,5 +1,6 @@
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Web.Data;
+using BabyBrain.Web.Services;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,7 +19,12 @@ public class BySourceModel : PageModel
     private const int MaxResults = 400;
 
     private readonly BabyBrainDbContext _db;
-    public BySourceModel(BabyBrainDbContext db) => _db = db;
+    private readonly UkBankHolidayService _holidays;
+    public BySourceModel(BabyBrainDbContext db, UkBankHolidayService holidays)
+    {
+        _db = db;
+        _holidays = holidays;
+    }
 
     public IReadOnlyList<SourceOption> SourceOptions { get; private set; } = Array.Empty<SourceOption>();
     public string? SelectedSource { get; private set; }
@@ -46,8 +52,19 @@ public class BySourceModel : PageModel
         if (!string.IsNullOrEmpty(source) && SourceOptions.Any(s => s.Id == source))
         {
             SelectedSource = source;
-            Results = await _db.EventOccurrences
-                .Where(e => e.Source == source && e.Date >= today)
+            var q = _db.EventOccurrences
+                .Where(e => e.Source == source && e.Date >= today);
+
+            // Hide community + library events on UK bank holidays — matches the
+            // Index search filter. See IndexModel for the rationale.
+            var upcomingHolidays = _holidays.Holidays.Where(d => d >= today).ToList();
+            if (upcomingHolidays.Count > 0)
+            {
+                q = q.Where(e => !upcomingHolidays.Contains(e.Date)
+                    || (e.Category != Categories.Community && e.Category != Categories.Library));
+            }
+
+            Results = await q
                 .OrderBy(e => e.Date).ThenBy(e => e.StartTime)
                 .Take(MaxResults)
                 .ToListAsync();

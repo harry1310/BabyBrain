@@ -1,5 +1,6 @@
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Web.Data;
+using BabyBrain.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -16,11 +17,13 @@ public class IndexModel : PageModel
 
     private readonly BabyBrainDbContext _db;
     private readonly GeocodingService _geocoder;
+    private readonly UkBankHolidayService _holidays;
 
-    public IndexModel(BabyBrainDbContext db, GeocodingService geocoder)
+    public IndexModel(BabyBrainDbContext db, GeocodingService geocoder, UkBankHolidayService holidays)
     {
         _db = db;
         _geocoder = geocoder;
+        _holidays = holidays;
     }
 
     public SearchFilter Filter { get; private set; } = new();
@@ -52,6 +55,16 @@ public class IndexModel : PageModel
 
         var q = _db.EventOccurrences.AsQueryable()
             .Where(e => e.Date >= from && e.Date <= to);
+
+        // Hide community + library events that fall on a UK bank holiday — those
+        // venues are reliably closed but the scrapers publish the weekly slot
+        // anyway. Only the dates inside the search window need to be checked.
+        var holidaysInWindow = _holidays.Holidays.Where(d => d >= from && d <= to).ToList();
+        if (holidaysInWindow.Count > 0)
+        {
+            q = q.Where(e => !holidaysInWindow.Contains(e.Date)
+                || (e.Category != Categories.Community && e.Category != Categories.Library));
+        }
 
         if (Filter.AgeMonths is int age)
         {

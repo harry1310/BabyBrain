@@ -61,6 +61,8 @@ builder.Services.AddHttpClient<TflJourneyService>(c =>
     c.DefaultRequestHeaders.Add("User-Agent", "BabyBrain/1.0 (+https://github.com/harry1310/BabyBrain)");
 });
 builder.Services.AddSingleton<IScrapeStatusTracker, ScrapeStatusTracker>();
+builder.Services.AddSingleton<UkBankHolidayService>();
+builder.Services.AddHostedService<UkBankHolidayRefreshService>();
 builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 builder.Services.AddScoped<ScrapeRunner>();
