@@ -12,7 +12,7 @@ namespace BabyBrain.Web.Services;
 // Sources sharing a time run together as a group, in source-id order.
 public sealed class DailyScrapeService : BackgroundService
 {
-    private static readonly TimeOnly DefaultRunAt = new(3, 0);
+    private static readonly TimeOnly DefaultRunAt = new(6, 30);
     private const string OverridesSection = "BABYBRAIN_SCRAPE_OVERRIDES";
     private const int HtmlArchiveKeepPerUrl = 5;
 
