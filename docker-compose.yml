@@ -27,6 +27,11 @@ services:
     environment:
       BABYBRAIN_DB_PATH: /data/babybrain.db
       BABYBRAIN_HTML_ARCHIVE_PATH: /data/scrape-html
+      # Per-source scrape time overrides. Default slot is 03:00 UTC.
+      # British Museum's JS-rendered detail pages were timing out at 03:00 UTC
+      # (likely overnight cache rebuild on their end); 06:00 UTC dodges that
+      # window. Quoted to keep YAML from parsing as a time literal.
+      BABYBRAIN_SCRAPE_OVERRIDES__british_museum_family: "06:00"
     # NB: no `ports:` block — Caddy is the only public face.
     volumes:
       - ./data:/data
