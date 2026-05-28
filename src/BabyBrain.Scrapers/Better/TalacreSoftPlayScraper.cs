@@ -9,9 +9,14 @@ namespace BabyBrain.Scrapers.Better;
 //
 // That public page is marketing only — the bookable sessions live in Better's
 // (GLL) booking API:
-//   GET better-admin.org.uk/api/activities/venue/{venue}/activity/{activity}/times?date=YYYY-MM-DD
+//   GET better-admin.org.uk/api/activities/venue/{venue}/activity/{activity}/v2/times?date=YYYY-MM-DD
 // which needs an Origin header matching the booking sub-domain (the HttpClient
 // is configured with it in Program.cs).
+//
+// The legacy /times endpoint (no v2 prefix) returns 422 for any date beyond
+// the next ~4 days; the SPA at bookings.better.org.uk hits the v2 path and
+// gets the full booking window (weeks out). Issue #X surfaced this — output
+// dropped from ~50 rows to 4 when the legacy endpoint's window tightened.
 //
 // Soft play is a rolling drop-in facility: the API lists ~35 staggered 1-hour
 // slots per day (every 15 min, ~09:00 onwards), all named "Soft Play". Emitting
@@ -101,7 +106,7 @@ public sealed class TalacreSoftPlayScraper : IScraper
     {
         try
         {
-            var url = $"{ApiBase}/{VenueSlug}/activity/{ActivitySlug}/times?date={date:yyyy-MM-dd}";
+            var url = $"{ApiBase}/{VenueSlug}/activity/{ActivitySlug}/v2/times?date={date:yyyy-MM-dd}";
             using var resp = await _http.GetAsync(url, ct);
             if (!resp.IsSuccessStatusCode) return null;
 
