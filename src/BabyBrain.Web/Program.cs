@@ -153,6 +153,11 @@ else
 }
 
 builder.Services.AddSingleton<PlaywrightFetcher>();
+// CurlFetcher shells out to the curl binary for the BM and Southbank hub
+// fetches — both sites' Cloudflare 403s every .NET HttpClient request due
+// to TLS fingerprinting, but lets curl through, and the responses are
+// server-side rendered so no JS engine is needed.
+builder.Services.AddSingleton<CurlFetcher>();
 builder.Services.AddScoped<IScraper, CamdenStayAndPlayScraper>();
 builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
 builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();

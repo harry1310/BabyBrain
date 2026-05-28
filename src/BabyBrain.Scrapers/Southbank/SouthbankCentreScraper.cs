@@ -23,6 +23,14 @@ namespace BabyBrain.Scrapers.Southbank;
 // the UI flags it. When the card *does* carry a time (e.g. "Sat 23 May 2026,
 // 11am") we use it and leave TimeApproximate false.
 //
+// FETCH STRATEGY (issues #15 / #17): the hub and detail pages both *appear*
+// to be a React SPA — but they actually server-side render when given a
+// browser-shaped User-Agent. We use CurlFetcher (subprocess curl) rather
+// than Playwright or HttpClient: curl's TLS fingerprint passes Cloudflare
+// while .NET's gets 403'd, and no JS engine has to boot — the response body
+// already has the cards / "Age guidance" item inline. That kills the
+// WaitForSelector-timeout failure mode we kept hitting on the slow VPS.
+//
 // AGE FILTER (issues #12 / #13): the families carousel is "family events" not
 // "under-5s events", so 5+ / 6+ shows (Blizzard, Play Along: Virtual
 // Orchestra) leak in. The card markup carries no age signal, so for any card
@@ -47,12 +55,12 @@ public sealed class SouthbankCentreScraper : IScraper
     public string SourceId => "southbank_centre_families";
     public string Category => Categories.Concert;
 
-    private readonly PlaywrightFetcher _fetcher;
+    private readonly CurlFetcher _curl;
     private readonly ILogger<SouthbankCentreScraper> _logger;
 
-    public SouthbankCentreScraper(PlaywrightFetcher fetcher, ILogger<SouthbankCentreScraper> logger)
+    public SouthbankCentreScraper(CurlFetcher curl, ILogger<SouthbankCentreScraper> logger)
     {
-        _fetcher = fetcher;
+        _curl = curl;
         _logger = logger;
     }
 
@@ -63,15 +71,7 @@ public sealed class SouthbankCentreScraper : IScraper
         var now = DateTimeOffset.UtcNow;
         var rows = new List<EventOccurrence>();
 
-        // Wait Attached, not Visible — the carousel inserts cards into the DOM
-        // before they paint, and on the slow production VPS the visibility
-        // check can blow past 30s even though the markup is already there. We
-        // also pad the timeout: a render miss here loses the whole source for
-        // the day (issue #15), so trade latency for resilience.
-        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(
-            HubUrl, "#upcoming-events ~ * .c-event-card",
-            Microsoft.Playwright.WaitForSelectorState.Attached, ct,
-            selectorTimeoutMs: 90_000);
+        var hubHtml = await _curl.FetchAsync(HubUrl, ct);
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
 
         foreach (var card in ExtractCards(hub))
@@ -104,13 +104,7 @@ public sealed class SouthbankCentreScraper : IScraper
 
         try
         {
-            // Wait for the masthead — it's the always-present container; the
-            // age-guidance item is optional, so we can't wait for it directly.
-            // Attached, not Visible — same reasoning as the hub fetch above.
-            var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
-                card.Url, ".c-event-masthead",
-                Microsoft.Playwright.WaitForSelectorState.Attached, ct,
-                selectorTimeoutMs: 60_000);
+            var detailHtml = await _curl.FetchAsync(card.Url, ct);
             var detail = await BrowsingContext.New(Configuration.Default)
                 .OpenAsync(req => req.Content(detailHtml), ct);
 
