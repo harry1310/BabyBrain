@@ -25,8 +25,11 @@ WORKDIR /app
 # The Playwright .NET image ships with an older .NET runtime than the one we
 # build against (net10.0). Install the ASP.NET 10 runtime alongside so
 # `dotnet BabyBrain.Web.dll` finds Microsoft.NETCore.App 10.0.x at startup.
+# Also installs curl, which the British Museum / Southbank scrapers shell
+# out to: Cloudflare 403s every .NET HttpClient request against those
+# domains (TLS fingerprint), but lets curl through.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget ca-certificates \
+    && apt-get install -y --no-install-recommends wget curl ca-certificates \
     && wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O /tmp/ms-prod.deb \
     && dpkg -i /tmp/ms-prod.deb \
     && rm /tmp/ms-prod.deb \

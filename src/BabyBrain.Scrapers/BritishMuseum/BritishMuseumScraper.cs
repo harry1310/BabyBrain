@@ -54,11 +54,13 @@ public sealed class BritishMuseumScraper : IScraper
     public string Category => Categories.Museum;
 
     private readonly PlaywrightFetcher _fetcher;
+    private readonly CurlFetcher _curl;
     private readonly ILogger<BritishMuseumScraper> _logger;
 
-    public BritishMuseumScraper(PlaywrightFetcher fetcher, ILogger<BritishMuseumScraper> logger)
+    public BritishMuseumScraper(PlaywrightFetcher fetcher, CurlFetcher curl, ILogger<BritishMuseumScraper> logger)
     {
         _fetcher = fetcher;
+        _curl = curl;
         _logger = logger;
     }
 
@@ -71,13 +73,15 @@ public sealed class BritishMuseumScraper : IScraper
         var diag = new StringBuilder();
 
         // Hub page: pull event card links from the #family-events section.
-        // Wait Attached, not Visible — the carousel anchors are in the DOM
-        // before the carousel paints, and we only read the markup.
+        // The hub server-side renders when given a browser User-Agent — every
+        // teaser anchor is in the response body, no JS needed. We use
+        // CurlFetcher (not Playwright, not HttpClient): Playwright kept
+        // timing out on the slow VPS, and HttpClient is 403'd by Cloudflare
+        // because of TLS fingerprinting. curl gets through cleanly.
         string hubHtml;
         try
         {
-            hubHtml = await _fetcher.FetchRenderedHtmlAsync(
-                HubUrl, "a.teaser__anchor[href^='/events/']", WaitForSelectorState.Attached, ct);
+            hubHtml = await _curl.FetchAsync(HubUrl, ct);
         }
         catch (Exception ex)
         {
