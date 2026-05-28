@@ -30,16 +30,20 @@ public sealed class BritishMuseumScraper : IScraper
     private const string Postcode = "WC1B 3DG";
 
     // Detail-page renders occasionally time out transiently on the small
-    // production VPS. Retry once before giving up — a swallowed miss silently
+    // production VPS. Retry before giving up — a swallowed miss silently
     // drops a whole event (this is what made the live row count lurch to 2).
-    private const int TeaserFetchAttempts = 2;
+    // Bumped from 2 to 3 after issue #10: a single teaser timed out x2 on the
+    // same run, and the carousel only had 2 cards that day (the other was
+    // age-filtered), so the run produced 0 rows.
+    private const int TeaserFetchAttempts = 3;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
     // The BM detail pages JS-render their occurrence list. That render is ~5s
     // locally but exceeds the default 30s wait on the 2-vCPU production VPS
-    // (issue #7: both detail fetches timed out at 30s). Give it a generous
+    // (issue #7: both detail fetches timed out at 30s; issue #10: 90s wasn't
+    // enough either when the detail page weighed ~4.7MB). Give it a generous
     // ceiling — slow is fine for a daily background scrape; failing isn't.
-    private const int DetailWaitMs = 90_000;
+    private const int DetailWaitMs = 120_000;
 
     // BabyBrain covers under-5s. The BM "Family events" carousel also lists
     // school-age activities; an event whose stated minimum age is at or above
