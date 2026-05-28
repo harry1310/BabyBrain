@@ -34,6 +34,11 @@ public static partial class TextParsing
         // in the wild on the early-years listing and detail pages.
         m = Regex.Match(t, @"(?:ages?|aged)\s*(\d+)\s*(?:[–\-]|to)\s*(\d+)\b");
         if (m.Success) return (int.Parse(m.Groups[1].Value) * 12, int.Parse(m.Groups[2].Value) * 12);
+        // Catches "for ages 5+" / "ages 6+" — Southbank's detail-page wording
+        // for unbounded minimum age. Must come AFTER the bounded "ages N-M"
+        // pattern so a range isn't reduced to its lower bound.
+        m = Regex.Match(t, @"(?:for\s+)?ages?\s+(\d+)\s*\+");
+        if (m.Success) return (int.Parse(m.Groups[1].Value) * 12, null);
         // "8–15-year-olds", "8-15 year olds", "8 to 15 year-olds"
         m = Regex.Match(t, @"(\d+)\s*(?:[–\-]|to)\s*(\d+)[\s\-]?year[\s\-]?olds?");
         if (m.Success) return (int.Parse(m.Groups[1].Value) * 12, int.Parse(m.Groups[2].Value) * 12);
