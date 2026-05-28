@@ -63,7 +63,15 @@ public sealed class SouthbankCentreScraper : IScraper
         var now = DateTimeOffset.UtcNow;
         var rows = new List<EventOccurrence>();
 
-        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(HubUrl, "#upcoming-events ~ * .c-event-card", ct: ct);
+        // Wait Attached, not Visible — the carousel inserts cards into the DOM
+        // before they paint, and on the slow production VPS the visibility
+        // check can blow past 30s even though the markup is already there. We
+        // also pad the timeout: a render miss here loses the whole source for
+        // the day (issue #15), so trade latency for resilience.
+        var hubHtml = await _fetcher.FetchRenderedHtmlAsync(
+            HubUrl, "#upcoming-events ~ * .c-event-card",
+            Microsoft.Playwright.WaitForSelectorState.Attached, ct,
+            selectorTimeoutMs: 90_000);
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
 
         foreach (var card in ExtractCards(hub))
@@ -98,8 +106,11 @@ public sealed class SouthbankCentreScraper : IScraper
         {
             // Wait for the masthead — it's the always-present container; the
             // age-guidance item is optional, so we can't wait for it directly.
+            // Attached, not Visible — same reasoning as the hub fetch above.
             var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
-                card.Url, ".c-event-masthead", ct: ct);
+                card.Url, ".c-event-masthead",
+                Microsoft.Playwright.WaitForSelectorState.Attached, ct,
+                selectorTimeoutMs: 60_000);
             var detail = await BrowsingContext.New(Configuration.Default)
                 .OpenAsync(req => req.Content(detailHtml), ct);
 
