@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Anthropic;
+using Anthropic.Exceptions;
 using Anthropic.Models.Messages;
 
 namespace BabyBrain.Web.Services.SelfHealing;
@@ -66,7 +68,6 @@ public sealed class ClaudeHealer : IClaudeHealer
                 Model = _model,
                 MaxTokens = 32000,
                 Thinking = new ThinkingConfigAdaptive(),
-                OutputConfig = new OutputConfig { Effort = Effort.High },
                 System = new List<TextBlockParam>
                 {
                     new() { Text = SystemPrompt },
@@ -79,9 +80,17 @@ public sealed class ClaudeHealer : IClaudeHealer
             var response = await _client.Messages.Create(parameters, cancellationToken: ct);
             return Parse(response, sourceId);
         }
+        catch (AnthropicBadRequestException ex)
+        {
+            // The 400 body carries the actual reason — surface it instead of just the type name.
+            _logger.LogWarning(ex,
+                "Anthropic 400 during heal of {Source}: {Message}", sourceId, ex.Message);
+            return HealOutcome.Failed($"claude_api_400:{ex.Message}");
+        }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Claude API call failed during heal of {Source}", sourceId);
+            _logger.LogWarning(ex, "Claude API call failed during heal of {Source}: {Message}",
+                sourceId, ex.Message);
             return HealOutcome.Failed($"claude_api_threw:{ex.GetType().Name}");
         }
     }
@@ -112,32 +121,46 @@ public sealed class ClaudeHealer : IClaudeHealer
         Description = "Return the root-cause diagnosis and any file changes needed to fix the scraper.",
         InputSchema = new()
         {
+            // Built with JsonNode rather than nested anonymous types — anonymous-type
+            // serialization has subtle ordering and casing surprises that the Anthropic
+            // API has rejected with 400s in the past.
             Properties = new Dictionary<string, JsonElement>
             {
-                ["diagnosis"] = JsonSerializer.SerializeToElement(new
+                ["diagnosis"] = ToElement(new JsonObject
                 {
-                    type = "string",
-                    description = "Concise root-cause explanation, 1-3 sentences.",
+                    ["type"] = "string",
+                    ["description"] = "Concise root-cause explanation, 1-3 sentences.",
                 }),
-                ["patches"] = JsonSerializer.SerializeToElement(new
+                ["patches"] = ToElement(new JsonObject
                 {
-                    type = "array",
-                    description = "Files to overwrite. Each contains the full new file contents. Empty array if no actionable fix is possible.",
-                    items = new
+                    ["type"] = "array",
+                    ["description"] = "Files to overwrite. Each contains the full new file contents. Empty array if no actionable fix is possible.",
+                    ["items"] = new JsonObject
                     {
-                        type = "object",
-                        properties = new
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
                         {
-                            path = new { type = "string", description = "Repo-relative path of the file to overwrite." },
-                            new_content = new { type = "string", description = "Full new file contents." },
+                            ["path"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                                ["description"] = "Repo-relative path of the file to overwrite.",
+                            },
+                            ["new_content"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                                ["description"] = "Full new file contents.",
+                            },
                         },
-                        required = new[] { "path", "new_content" },
+                        ["required"] = new JsonArray("path", "new_content"),
                     },
                 }),
             },
             Required = ["diagnosis", "patches"],
         },
     };
+
+    private static JsonElement ToElement(JsonNode node) =>
+        JsonSerializer.SerializeToElement(node);
 
     private HealOutcome Parse(Message response, string sourceId)
     {
