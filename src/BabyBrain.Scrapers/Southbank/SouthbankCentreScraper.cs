@@ -4,14 +4,15 @@ using AngleSharp;
 using AngleSharp.Dom;
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Scrapers.Shared;
+using Microsoft.Extensions.Logging;
 
 namespace BabyBrain.Scrapers.Southbank;
 
 // Source: https://www.southbankcentre.co.uk/visit-us/families/#upcoming-events
 // The families hub lists curated family events in a carousel under
 // #upcoming-events. Each .c-event-card already carries everything we need:
-// title, date range, listing description, venue (hall) and price — so this
-// scraper works off the hub alone, no per-event detail fetch.
+// title, date range, listing description, venue (hall) and price — so the
+// hub alone drives every row.
 //
 // NOTE (2026 redesign): Southbank's site rebuild removed the per-performance
 // time list from event detail pages — detail pages now show only a date
@@ -21,11 +22,22 @@ namespace BabyBrain.Scrapers.Southbank;
 // placeholder start time (PlaceholderStart) and set TimeApproximate = true so
 // the UI flags it. When the card *does* carry a time (e.g. "Sat 23 May 2026,
 // 11am") we use it and leave TimeApproximate false.
+//
+// AGE FILTER (issues #12 / #13): the families carousel is "family events" not
+// "under-5s events", so 5+ / 6+ shows (Blizzard, Play Along: Virtual
+// Orchestra) leak in. The card markup carries no age signal, so for any card
+// whose title/summary doesn't yield an age band, we fetch the detail page
+// and read the "Age guidance" item under .c-event-need-to-know. If that
+// resolves to a minimum age at or above UnderFiveCutoffMonths, we drop the
+// event entirely.
 public sealed class SouthbankCentreScraper : IScraper
 {
     private const string HubUrl = "https://www.southbankcentre.co.uk/visit-us/families/";
     private const string Address = "Belvedere Road, London";
     private const string Postcode = "SE1 8XX"; // Southbank Centre, Belvedere Road
+
+    // BabyBrain covers under-5s. Mirrors the British Museum scraper.
+    private const int UnderFiveCutoffMonths = 60;
 
     // Used when the hub card gives a date but no time. Southbank no longer
     // publishes exact session times on the public site; this is an admitted
@@ -36,8 +48,13 @@ public sealed class SouthbankCentreScraper : IScraper
     public string Category => Categories.Concert;
 
     private readonly PlaywrightFetcher _fetcher;
+    private readonly ILogger<SouthbankCentreScraper> _logger;
 
-    public SouthbankCentreScraper(PlaywrightFetcher fetcher) => _fetcher = fetcher;
+    public SouthbankCentreScraper(PlaywrightFetcher fetcher, ILogger<SouthbankCentreScraper> logger)
+    {
+        _fetcher = fetcher;
+        _logger = logger;
+    }
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
@@ -52,9 +69,55 @@ public sealed class SouthbankCentreScraper : IScraper
         foreach (var card in ExtractCards(hub))
         {
             ct.ThrowIfCancellationRequested();
-            rows.AddRange(BuildOccurrences(card, today, horizonEnd, now));
+
+            var (minAge, maxAge) = await ResolveAgeRangeAsync(card, ct);
+            if (minAge is int min && min >= UnderFiveCutoffMonths)
+            {
+                _logger.LogInformation(
+                    "Southbank: skipping '{Title}' as school-age (min {MinAge}mo from {Url})",
+                    card.Title, min, card.Url);
+                continue;
+            }
+
+            rows.AddRange(BuildOccurrences(card, minAge, maxAge, today, horizonEnd, now));
         }
         return rows;
+    }
+
+    // Decides the event's age band: first from card text (cheap), then —
+    // only if the card carries no age signal at all — from the detail page's
+    // "Age guidance" section. A detail-fetch failure leaves the row with no
+    // age rather than dropping it; that mirrors the prior leaky-but-present
+    // behaviour and avoids killing the row on a transient render timeout.
+    private async Task<(int? min, int? max)> ResolveAgeRangeAsync(Card card, CancellationToken ct)
+    {
+        var (m, x) = TextParsing.ParseAgeRange(card.Title + " " + card.Summary);
+        if (m is not null || x is not null) return (m, x);
+
+        try
+        {
+            // Wait for the masthead — it's the always-present container; the
+            // age-guidance item is optional, so we can't wait for it directly.
+            var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
+                card.Url, ".c-event-masthead", ct: ct);
+            var detail = await BrowsingContext.New(Configuration.Default)
+                .OpenAsync(req => req.Content(detailHtml), ct);
+
+            foreach (var item in detail.QuerySelectorAll(".c-event-need-to-know__item"))
+            {
+                var title = item.QuerySelector(".c-event-need-to-know__title")?.TextContent.Trim();
+                if (!string.Equals(title, "Age guidance", StringComparison.OrdinalIgnoreCase)) continue;
+                var info = item.QuerySelector(".c-event-need-to-know__info")?.TextContent.Trim();
+                if (string.IsNullOrEmpty(info)) break;
+                return TextParsing.ParseAgeRange(info);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Southbank: detail-page age lookup failed for {Url}; emitting without age", card.Url);
+        }
+        return (null, null);
     }
 
     private record Card(string Title, string Summary, string Url, string Venue,
@@ -88,9 +151,9 @@ public sealed class SouthbankCentreScraper : IScraper
         }
     }
 
-    private IEnumerable<EventOccurrence> BuildOccurrences(Card card, DateOnly from, DateOnly to, DateTimeOffset now)
+    private IEnumerable<EventOccurrence> BuildOccurrences(
+        Card card, int? minAge, int? maxAge, DateOnly from, DateOnly to, DateTimeOffset now)
     {
-        var (minAge, maxAge) = TextParsing.ParseAgeRange(card.Title + " " + card.Summary);
         var (dates, start, timeKnown) = ParseSchedule(card.DateRangeText, from);
         var notes = card.Summary.Length > 0 ? card.Summary : null;
 
