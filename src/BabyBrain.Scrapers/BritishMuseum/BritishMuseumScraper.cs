@@ -54,13 +54,13 @@ public sealed class BritishMuseumScraper : IScraper
     public string Category => Categories.Museum;
 
     private readonly PlaywrightFetcher _fetcher;
-    private readonly CurlFetcher _curl;
+    private readonly ScrapingApiFetcher _api;
     private readonly ILogger<BritishMuseumScraper> _logger;
 
-    public BritishMuseumScraper(PlaywrightFetcher fetcher, CurlFetcher curl, ILogger<BritishMuseumScraper> logger)
+    public BritishMuseumScraper(PlaywrightFetcher fetcher, ScrapingApiFetcher api, ILogger<BritishMuseumScraper> logger)
     {
         _fetcher = fetcher;
-        _curl = curl;
+        _api = api;
         _logger = logger;
     }
 
@@ -73,15 +73,16 @@ public sealed class BritishMuseumScraper : IScraper
         var diag = new StringBuilder();
 
         // Hub page: pull event card links from the #family-events section.
-        // The hub server-side renders when given a browser User-Agent — every
-        // teaser anchor is in the response body, no JS needed. We use
-        // CurlFetcher (not Playwright, not HttpClient): Playwright kept
-        // timing out on the slow VPS, and HttpClient is 403'd by Cloudflare
-        // because of TLS fingerprinting. curl gets through cleanly.
+        // The hub server-side renders when given a browser User-Agent, but
+        // Cloudflare blocks every request from the Hetzner VPS IP — even
+        // curl with a browser UA got a "Just a moment..." challenge page in
+        // prod (#21). Route through ScraperAPI's residential proxy pool,
+        // which solves the CF challenge for us. Detail pages still go via
+        // Playwright below — their occurrence list IS JS-rendered.
         string hubHtml;
         try
         {
-            hubHtml = await _curl.FetchAsync(HubUrl, ct);
+            hubHtml = await _api.FetchAsync(HubUrl, ct);
         }
         catch (Exception ex)
         {

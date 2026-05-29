@@ -23,13 +23,13 @@ namespace BabyBrain.Scrapers.Southbank;
 // the UI flags it. When the card *does* carry a time (e.g. "Sat 23 May 2026,
 // 11am") we use it and leave TimeApproximate false.
 //
-// FETCH STRATEGY (issues #15 / #17): the hub and detail pages both *appear*
-// to be a React SPA — but they actually server-side render when given a
-// browser-shaped User-Agent. We use CurlFetcher (subprocess curl) rather
-// than Playwright or HttpClient: curl's TLS fingerprint passes Cloudflare
-// while .NET's gets 403'd, and no JS engine has to boot — the response body
-// already has the cards / "Age guidance" item inline. That kills the
-// WaitForSelector-timeout failure mode we kept hitting on the slow VPS.
+// FETCH STRATEGY (issues #15 / #17 / #20): the hub and detail pages both
+// server-side render when given a browser-shaped User-Agent — neither needs
+// a JS engine. But Cloudflare blocks every request from the Hetzner VPS IP
+// regardless of User-Agent or TLS shape; PR #19's curl-from-prod still got
+// a "Just a moment..." challenge page. So we route both hub and detail
+// through ScraperAPI's residential-proxy endpoint, which solves the CF
+// challenge for us and returns clean SSR'd HTML.
 //
 // AGE FILTER (issues #12 / #13): the families carousel is "family events" not
 // "under-5s events", so 5+ / 6+ shows (Blizzard, Play Along: Virtual
@@ -55,12 +55,12 @@ public sealed class SouthbankCentreScraper : IScraper
     public string SourceId => "southbank_centre_families";
     public string Category => Categories.Concert;
 
-    private readonly CurlFetcher _curl;
+    private readonly ScrapingApiFetcher _api;
     private readonly ILogger<SouthbankCentreScraper> _logger;
 
-    public SouthbankCentreScraper(CurlFetcher curl, ILogger<SouthbankCentreScraper> logger)
+    public SouthbankCentreScraper(ScrapingApiFetcher api, ILogger<SouthbankCentreScraper> logger)
     {
-        _curl = curl;
+        _api = api;
         _logger = logger;
     }
 
@@ -71,7 +71,7 @@ public sealed class SouthbankCentreScraper : IScraper
         var now = DateTimeOffset.UtcNow;
         var rows = new List<EventOccurrence>();
 
-        var hubHtml = await _curl.FetchAsync(HubUrl, ct);
+        var hubHtml = await _api.FetchAsync(HubUrl, ct);
         var hub = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(hubHtml), ct);
 
         foreach (var card in ExtractCards(hub))
@@ -104,7 +104,7 @@ public sealed class SouthbankCentreScraper : IScraper
 
         try
         {
-            var detailHtml = await _curl.FetchAsync(card.Url, ct);
+            var detailHtml = await _api.FetchAsync(card.Url, ct);
             var detail = await BrowsingContext.New(Configuration.Default)
                 .OpenAsync(req => req.Content(detailHtml), ct);
 
