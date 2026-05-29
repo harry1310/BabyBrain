@@ -153,11 +153,30 @@ else
 }
 
 builder.Services.AddSingleton<PlaywrightFetcher>();
-// CurlFetcher shells out to the curl binary for the BM and Southbank hub
-// fetches — both sites' Cloudflare 403s every .NET HttpClient request due
-// to TLS fingerprinting, but lets curl through, and the responses are
-// server-side rendered so no JS engine is needed.
-builder.Services.AddSingleton<CurlFetcher>();
+// ScrapingApiFetcher proxies BM + Southbank fetches through ScraperAPI's
+// residential-proxy endpoint. Both sites' Cloudflare blocks the Hetzner VPS
+// outright (even curl from prod hit a "Just a moment..." challenge), so we
+// need someone with a clean residential IP to do the fetch for us. Key
+// comes from BABYBRAIN_SCRAPERAPI_KEY in the container env.
+var scraperApiKey = builder.Configuration["BABYBRAIN_SCRAPERAPI_KEY"];
+if (string.IsNullOrWhiteSpace(scraperApiKey))
+{
+    throw new InvalidOperationException(
+        "BABYBRAIN_SCRAPERAPI_KEY is not set — required for the British Museum and " +
+        "Southbank Centre scrapers. Get a free key at https://www.scraperapi.com/.");
+}
+const string scraperApiClient = "scraperapi";
+builder.Services.AddHttpClient(scraperApiClient, c =>
+{
+    // ScraperAPI can take a while to solve a Cloudflare challenge — give it
+    // headroom on a per-call basis, then the orchestrator's overall scrape
+    // timeout still bounds the worst case.
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddSingleton(sp => new ScrapingApiFetcher(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(scraperApiClient),
+    scraperApiKey!,
+    sp.GetRequiredService<ILogger<ScrapingApiFetcher>>()));
 builder.Services.AddScoped<IScraper, CamdenStayAndPlayScraper>();
 builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
 builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
