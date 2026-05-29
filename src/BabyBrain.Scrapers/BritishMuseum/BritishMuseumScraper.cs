@@ -7,7 +7,6 @@ using AngleSharp.Dom;
 using BabyBrain.Scrapers.Domain;
 using BabyBrain.Scrapers.Shared;
 using Microsoft.Extensions.Logging;
-using Microsoft.Playwright;
 
 namespace BabyBrain.Scrapers.BritishMuseum;
 
@@ -29,37 +28,28 @@ public sealed class BritishMuseumScraper : IScraper
     private const string Address = "Great Russell Street, London";
     private const string Postcode = "WC1B 3DG";
 
-    // Detail-page renders occasionally time out transiently on the small
-    // production VPS. Retry before giving up — a swallowed miss silently
-    // drops a whole event (this is what made the live row count lurch to 2).
-    // Bumped from 2 to 3 after issue #10: a single teaser timed out x2 on the
-    // same run, and the carousel only had 2 cards that day (the other was
-    // age-filtered), so the run produced 0 rows.
-    private const int TeaserFetchAttempts = 3;
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
-
-    // The BM detail pages JS-render their occurrence list. That render is ~5s
-    // locally but exceeds the default 30s wait on the 2-vCPU production VPS
-    // (issue #7: both detail fetches timed out at 30s; issue #10: 90s wasn't
-    // enough either when the detail page weighed ~4.7MB). Give it a generous
-    // ceiling — slow is fine for a daily background scrape; failing isn't.
-    private const int DetailWaitMs = 120_000;
-
     // BabyBrain covers under-5s. The BM "Family events" carousel also lists
     // school-age activities; an event whose stated minimum age is at or above
     // this (5 years, in months) is dropped.
     private const int UnderFiveCutoffMonths = 60;
 
+    // BM detail pages drop their age guidance inline with each activity
+    // (`<br>Ages 6+<br>`, `<br>Ages 5 and under<br>`) rather than in a
+    // structured "Age guidance" item like SBC. An event with several
+    // activities can carry several different age signals — this regex finds
+    // every "Ages …" phrase so we can take the most inclusive view.
+    private static readonly Regex AgeGuidancePattern = new(
+        @"[Aa]ges?\s+(?:\d+\+|\d+\s*(?:and|or)\s*under|\d+\s*[-–—]\s*\d+)",
+        RegexOptions.Compiled);
+
     public string SourceId => "british_museum_family";
     public string Category => Categories.Museum;
 
-    private readonly PlaywrightFetcher _fetcher;
     private readonly ScrapingApiFetcher _api;
     private readonly ILogger<BritishMuseumScraper> _logger;
 
-    public BritishMuseumScraper(PlaywrightFetcher fetcher, ScrapingApiFetcher api, ILogger<BritishMuseumScraper> logger)
+    public BritishMuseumScraper(ScrapingApiFetcher api, ILogger<BritishMuseumScraper> logger)
     {
-        _fetcher = fetcher;
         _api = api;
         _logger = logger;
     }
@@ -72,13 +62,13 @@ public sealed class BritishMuseumScraper : IScraper
         var rows = new List<EventOccurrence>();
         var diag = new StringBuilder();
 
-        // Hub page: pull event card links from the #family-events section.
-        // The hub server-side renders when given a browser User-Agent, but
-        // Cloudflare blocks every request from the Hetzner VPS IP — even
-        // curl with a browser UA got a "Just a moment..." challenge page in
-        // prod (#21). Route through ScraperAPI's residential proxy pool,
-        // which solves the CF challenge for us. Detail pages still go via
-        // Playwright below — their occurrence list IS JS-rendered.
+        // Hub + detail both go via ScraperAPI's residential proxies — Cloudflare
+        // 403s every request from the Hetzner VPS (and from CF Workers too) even
+        // with a browser-shaped client (issues #18, #21). Detail uses renderJs=true
+        // because the occurrence list is filled in client-side; the same render
+        // also lets us read the inline "Ages …" guidance that BM weaves into each
+        // activity description (issue surfaced by the 6+ Spring myths event
+        // slipping through after #22).
         string hubHtml;
         try
         {
@@ -98,44 +88,23 @@ public sealed class BritishMuseumScraper : IScraper
         {
             ct.ThrowIfCancellationRequested();
 
-            // Retry the detail fetch: a transient render timeout shouldn't cost
-            // us the whole event. Wait for an actual occurrence row, not just
-            // the [data-js-event-occurrences] container — that shell attaches
-            // before its accordion rows render in, and snapshotting the gap
-            // yields an empty parse. Attached, not Visible: the rows sit inside
-            // collapsed accordions, so they're in the DOM but not painted.
-            Exception? teaserFailure = null;
-            for (var attempt = 1; attempt <= TeaserFetchAttempts; attempt++)
+            try
             {
-                try
-                {
-                    var sw = Stopwatch.StartNew();
-                    var detailHtml = await _fetcher.FetchRenderedHtmlAsync(
-                        teaser.Url,
-                        "[data-js-event-occurrences] .occurrence-list__item",
-                        WaitForSelectorState.Attached,
-                        ct,
-                        selectorTimeoutMs: DetailWaitMs);
-                    sw.Stop();
-                    var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
-                    var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
-                    rows.AddRange(teaserRows);
-                    diag.Append($"[{teaser.Title}] OK in {sw.ElapsedMilliseconds}ms " +
-                                $"({detailHtml.Length} chars): {note}. ");
-                    teaserFailure = null;
-                    break;
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    teaserFailure = ex;
-                    if (attempt < TeaserFetchAttempts)
-                        await Task.Delay(RetryDelay, ct);
-                }
+                var sw = Stopwatch.StartNew();
+                var detailHtml = await _api.FetchAsync(teaser.Url, ct, renderJs: true);
+                sw.Stop();
+                var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
+                var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
+                rows.AddRange(teaserRows);
+                diag.Append($"[{teaser.Title}] OK in {sw.ElapsedMilliseconds}ms " +
+                            $"({detailHtml.Length} chars): {note}. ");
             }
-            if (teaserFailure is not null)
-                diag.Append($"[{teaser.Title}] FETCH FAILED x{TeaserFetchAttempts}: " +
-                            $"{teaserFailure.GetType().Name}: {teaserFailure.Message}. ");
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                diag.Append($"[{teaser.Title}] FETCH FAILED: " +
+                            $"{ex.GetType().Name}: {ex.Message}. ");
+            }
         }
 
         var summary = $"British Museum scrape: {rows.Count} row(s). {diag}".TrimEnd();
@@ -188,10 +157,18 @@ public sealed class BritishMuseumScraper : IScraper
             return (rows, "no [data-js-event-occurrences] container");
 
         var vid = container.GetAttribute("data-vid") ?? Slug(teaser.Url);
-        var (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Summary);
 
-        // Skip school-age events (e.g. the 8-15 sleepover). An event with no
-        // stated age is kept — most BM family activities welcome all ages.
+        // BM weaves age guidance inline ("Ages 6+", "Ages 5 and under") with
+        // each activity description. An event might have several activities,
+        // each with its own age signal. Keep the event if ANY activity could
+        // include under-5s; drop only when every detected age signal is
+        // school-age. Fall back to the hub teaser summary when the detail
+        // body yields nothing.
+        var detailBodyText = detail.QuerySelector("body")?.TextContent ?? "";
+        var (minAge, maxAge) = MostInclusiveAge(detailBodyText);
+        if (minAge is null && maxAge is null)
+            (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Summary);
+
         if (minAge is int min && min >= UnderFiveCutoffMonths)
             return (rows, $"age-filtered ({min}mo+, school-age)");
 
@@ -254,6 +231,28 @@ public sealed class BritishMuseumScraper : IScraper
             + (outOfHorizon > 0 ? $"; {outOfHorizon} out-of-horizon" : "")
             + (noTime > 0 ? $"; {noTime} with no parseable time" : "");
         return (rows, note);
+    }
+
+    // Walks every "Ages …" phrase in the page text and returns the most
+    // inclusive band: lowest min across all matches, and null max if any
+    // match is unbounded ("Ages 6+"). Returns (null, null) if no phrase
+    // was matched.
+    private static (int? min, int? max) MostInclusiveAge(string text)
+    {
+        int? min = null;
+        int? max = null;
+        var unboundedAbove = false;
+        foreach (Match phrase in AgeGuidancePattern.Matches(text))
+        {
+            var (parsedMin, parsedMax) = TextParsing.ParseAgeRange(phrase.Value);
+            if (parsedMin is int mn && (min is null || mn < min)) min = mn;
+            if (parsedMax is null && parsedMin is not null)
+                unboundedAbove = true;
+            else if (parsedMax is int mx && (max is null || mx > max))
+                max = mx;
+        }
+        if (unboundedAbove) max = null;
+        return (min, max);
     }
 
     private static bool TryParseMonthYear(string? label, out int year, out int month)
