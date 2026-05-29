@@ -33,12 +33,18 @@ public sealed class ScrapingApiFetcher
         _logger = logger;
     }
 
-    public async Task<string> FetchAsync(string url, CancellationToken ct = default)
+    // renderJs=true asks ScraperAPI to spin up a headless browser, execute
+    // JS, and return the fully-hydrated DOM — needed when the content we
+    // want is filled in client-side (e.g. the British Museum event detail
+    // pages' occurrence list). Costs more API credits per call, so only
+    // use it where the markup genuinely requires JS.
+    public async Task<string> FetchAsync(string url, CancellationToken ct = default, bool renderJs = false)
     {
         var proxied =
             $"{EndpointBase}?api_key={Uri.EscapeDataString(_apiKey)}" +
             $"&url={Uri.EscapeDataString(url)}" +
             "&country_code=gb";
+        if (renderJs) proxied += "&render=true";
 
         using var resp = await _http.GetAsync(proxied, ct);
         if (!resp.IsSuccessStatusCode)
