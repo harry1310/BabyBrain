@@ -2,6 +2,7 @@ using BabyBrain.Scrapers;
 using BabyBrain.Scrapers.BachToBaby;
 using BabyBrain.Scrapers.Barbican;
 using BabyBrain.Scrapers.Better;
+using BabyBrain.Scrapers.BritishLibrary;
 using BabyBrain.Scrapers.BritishMuseum;
 using BabyBrain.Scrapers.Camden;
 using BabyBrain.Scrapers.CityOfLondon;
@@ -323,6 +324,19 @@ builder.Services.AddHttpClient<MomeLondonCreativeClassesScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<MomeLondonCreativeClassesScraper>());
+
+// British Library "London Family Events": curated free family workshops/events.
+// Server-rendered HTML, no JS challenge, so plain HTTP with a browser-shaped UA
+// is enough. Walks the listing to each /events detail page and reads the
+// schema.org Event JSON-LD (one block per session).
+builder.Services.AddHttpClient<BritishLibraryFamilyScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<BritishLibraryFamilyScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 

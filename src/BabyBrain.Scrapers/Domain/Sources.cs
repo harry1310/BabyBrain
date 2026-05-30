@@ -15,6 +15,7 @@ public static class Sources
         "bach_to_baby"                   => "Bach to Baby",
         "barbican_parent_and_baby"       => "Barbican Centre",
         "better_talacre_soft_play"       => "Talacre Community Sports Centre",
+        "british_library_family"         => "British Library",
         "british_museum_family"          => "British Museum",
         "camden_stay_and_play"           => "Camden Stay & Play",
         "city_of_london_libraries"       => "City of London Libraries",
