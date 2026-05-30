@@ -23,6 +23,7 @@ public static class Sources
         "islington_findyour"             => "Islington Libraries",
         "lso_under_5s_concerts"          => "LSO St Luke's",
         "ltm_singing_and_story_sessions" => "London Transport Museum",
+        "mome_london_creative_classes"   => "Mome London",
         "mw_health_classes"              => "Moon Women's Health",
         "postal_museum_post_and_play"    => "The Postal Museum",
         "royal_parks_play_in_the_park"   => "The Royal Parks",

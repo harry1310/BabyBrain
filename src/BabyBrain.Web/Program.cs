@@ -10,6 +10,7 @@ using BabyBrain.Scrapers.Holborn;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.Lso;
 using BabyBrain.Scrapers.Ltm;
+using BabyBrain.Scrapers.MomeLondon;
 using BabyBrain.Scrapers.MwHealth;
 using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.RoyalParks;
@@ -309,6 +310,19 @@ builder.Services.AddHttpClient<RoyalParksPlayInTheParkScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<RoyalParksPlayInTheParkScraper>());
+
+// Mome London creative classes (painting/music/dance/etc.) for under-4s at their
+// Angel play space. Server-rendered WordPress/Elementor HTML, fine over plain
+// HTTP with a browser-shaped UA. Ingests only the visible "class cards" — the
+// page's detailed timetable grid is hidden on every breakpoint, so we skip it.
+builder.Services.AddHttpClient<MomeLondonCreativeClassesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<MomeLondonCreativeClassesScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
