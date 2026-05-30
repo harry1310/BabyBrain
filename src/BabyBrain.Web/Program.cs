@@ -12,6 +12,7 @@ using BabyBrain.Scrapers.Lso;
 using BabyBrain.Scrapers.Ltm;
 using BabyBrain.Scrapers.MwHealth;
 using BabyBrain.Scrapers.PostalMuseum;
+using BabyBrain.Scrapers.RoyalParks;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
@@ -296,6 +297,18 @@ builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<MwHealthClasses
 // fingerprints and blocks .NET's HTTP client, so this scraper goes through
 // Playwright (a real browser) like the Cloudflare-fronted sources.
 builder.Services.AddScoped<IScraper, BachToBabyConcertsScraper>();
+
+// The Royal Parks "Play in the Park": free drop-in family play sessions across a
+// handful of dates in three parks. Server-rendered HTML behind a CDN that wants
+// a browser UA, no JS challenge — plain HTTP is enough.
+builder.Services.AddHttpClient<RoyalParksPlayInTheParkScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<RoyalParksPlayInTheParkScraper>());
 
 builder.Services.AddHostedService<DailyScrapeService>();
 
