@@ -35,13 +35,18 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
         WaitForSelectorState waitState = WaitForSelectorState.Visible,
         CancellationToken ct = default,
         string? userAgent = null,
-        int? selectorTimeoutMs = null)
+        int? selectorTimeoutMs = null,
+        bool useNativeUserAgent = false)
     {
         await EnsureBrowserAsync(ct);
 
+        // When useNativeUserAgent is set we deliberately leave UserAgent unset so
+        // Chromium sends its own UA together with matching sec-ch-ua client hints.
+        // Some WAFs (Bach to Baby's) now 403 any *spoofed* UA because the override
+        // string disagrees with the client-hint headers; the native pair passes.
         var context = await _browser!.NewContextAsync(new()
         {
-            UserAgent = userAgent ?? DefaultUserAgent,
+            UserAgent = useNativeUserAgent ? null : (userAgent ?? DefaultUserAgent),
             Locale = "en-GB",
         });
         try

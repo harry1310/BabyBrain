@@ -16,8 +16,10 @@ namespace BabyBrain.Scrapers.BachToBaby;
 //
 // The site sits behind a WAF that 403s .NET's HTTP client outright — it
 // fingerprints the TLS handshake, so a plain HttpClient is blocked whatever
-// User-Agent it sends. We therefore fetch through Playwright (a real browser),
-// overriding the UA because the same WAF separately blocks a stock Chrome UA.
+// User-Agent it sends. We therefore fetch through Playwright (a real browser).
+// The WAF also 403s any *spoofed* UA (the override string disagrees with
+// Chromium's sec-ch-ua client hints), so we let Playwright send its native UA
+// via useNativeUserAgent rather than overriding it.
 //
 // Bach to Baby tours nationwide. Rather than follow every venue page (each
 // also behind the WAF), London venues are curated below with their postcodes;
@@ -26,10 +28,6 @@ public sealed class BachToBabyConcertsScraper : IScraper
 {
     private const string ListingUrl = "https://www.bachtobaby.com/whats-on-this-month";
     private const string Origin = "https://www.bachtobaby.com";
-
-    // The WAF blocks a stock Chrome UA; this one is allowed.
-    private const string UserAgent =
-        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)";
 
     // Bach to Baby's standard ticket — £18 on the door, uniform across venues.
     private const decimal TicketPrice = 18m;
@@ -82,7 +80,7 @@ public sealed class BachToBabyConcertsScraper : IScraper
         var now = DateTimeOffset.UtcNow;
 
         var html = await _fetcher.FetchRenderedHtmlAsync(
-            ListingUrl, "td.date-block", WaitForSelectorState.Attached, ct, userAgent: UserAgent);
+            ListingUrl, "td.date-block", WaitForSelectorState.Attached, ct, useNativeUserAgent: true);
         var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
 
         // Walk month headings and concert cells in document order so each
