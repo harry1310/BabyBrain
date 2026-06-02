@@ -30,6 +30,7 @@ public static class Sources
         "royal_parks_play_in_the_park"   => "The Royal Parks",
         "science_museum_childrens"       => "Science Museum",
         "southbank_centre_families"      => "Southbank Centre",
+        "tempo_tots_north_london"        => "Tempo Tots North London",
         "tockify_fitzrovia"              => "Fitzrovia Community Centre",
         "va_early_years"                 => "Young V&A",
         "wigmore_hall_under_fives"       => "Wigmore Hall",

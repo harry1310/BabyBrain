@@ -18,6 +18,7 @@ using BabyBrain.Scrapers.RoyalParks;
 using BabyBrain.Scrapers.ScienceMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
+using BabyBrain.Scrapers.TempoTots;
 using BabyBrain.Scrapers.Tockify;
 using BabyBrain.Scrapers.Va;
 using BabyBrain.Scrapers.WigmoreHall;
@@ -240,6 +241,16 @@ builder.Services.AddHttpClient<ScienceMuseumChildrensScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<ScienceMuseumChildrensScraper>());
+
+// Tempo Tots North London: one weekly drop-in music class on a Wix page,
+// fine over plain HTTP with a browser-shaped UA.
+builder.Services.AddHttpClient<TempoTotsNorthLondonScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TempoTotsNorthLondonScraper>());
 
 // Postal Museum: single recurring "Post and Play" event page. Behind
 // Cloudflare, so it goes through Playwright rather than a plain HttpClient.
