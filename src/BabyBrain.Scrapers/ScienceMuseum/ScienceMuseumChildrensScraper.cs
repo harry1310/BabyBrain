@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AngleSharp;
 using AngleSharp.Dom;
@@ -35,14 +37,18 @@ namespace BabyBrain.Scrapers.ScienceMuseum;
 //                                           in-horizon span.
 //   • "Dates vary" / "Wednesdays" / ""   → not datable from the HTML; skipped.
 //
-// Per-session times for the ticketed shows (e.g. Bubble Explorers, "Show times
-// vary so please select your preferred timeslot when booking") are only
-// available inside the Tessitura booking calendar, which sits behind a Queue-it
-// waiting room + Incapsula WAF and renders entirely client-side — the same wall
-// that parked NHM Adventure Babies. When we can't read a real clock time we fall
-// back to a 10:00 placeholder, flag TimeApproximate, and note in SessionNotes
-// that the visitor should check the booking page. Galleries publish real opening
-// hours, so those are exact.
+// Ticketed shows (e.g. Bubble Explorers) only say "Show times vary…" on the
+// detail page — the real dates and times live in the Tessitura booking system.
+// Its calendar renders client-side behind a Queue-it waiting room, BUT the JSON
+// feed it pulls from — POST /api/products/productionseasons on
+// my.sciencemuseum.org.uk — is reachable directly: anonymous, no cookies, no
+// queue token, given the public mode-of-sale/source ids and the event's keyword
+// id (the `kid` in its "Book now" link). So when a detail page carries a booking
+// kid we ask that feed for the genuine performances and emit one exact, real-time
+// row each; only if the feed is unreachable or empty do we fall back to parsing
+// the human-readable Date field (flagging TimeApproximate when no time shows).
+// Galleries (Pattern Pod etc.) have no booking kid and publish real opening
+// hours, so those stay exact too.
 public sealed class ScienceMuseumChildrensScraper : IScraper
 {
     private const string Origin = "https://www.sciencemuseum.org.uk";
@@ -50,6 +56,13 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
     private const string Venue = "Science Museum";
     private const string Address = "Exhibition Road, South Kensington, London";
     private const string Postcode = "SW7 2DD";
+
+    // Tessitura booking feed: the public-web mode-of-sale (3) and source (1) are
+    // seeded into every booking page ("Session MOS: 3", sourceId 1) and let us
+    // POST for a keyword's performances anonymously.
+    private const string BookingApiUrl = "https://my.sciencemuseum.org.uk/api/products/productionseasons";
+    private const int BookingModeOfSale = 3;
+    private const int BookingSourceId = 1;
 
     // Safety cap on pagination — the index is ~4 pages today; we stop early on
     // the first empty page, this just bounds a runaway loop if the markup shifts.
@@ -61,8 +74,17 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
     // resolves to 96 and is excluded.
     private const int ToddlerCeilingMonths = 36;
 
-    // Placeholder when a show hides its times behind the booking system.
+    // …and we additionally require the upper bound to sit within young-childhood
+    // (<= 9 years). This keeps the genuinely little-one offerings (Bubble's "7
+    // and under" → max 84, Pattern Pod's "8 and under" → max 96) while dropping
+    // broad whole-family items like the Great Exhibition Road Festival
+    // ("under 12s and their families" → max 144) that aren't baby/toddler events.
+    private const int YoungChildCeilingMonths = 9 * 12;
+
+    // Placeholder when a fallback can't read a real clock time.
     private static readonly TimeOnly PlaceholderStart = new(10, 0);
+
+    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     public string SourceId => "science_museum_childrens";
     public string Category => Categories.Museum;
@@ -94,7 +116,7 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
             if (html is null) continue;
 
             var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
-            rows.AddRange(BuildRows(slug, url, doc, today, horizonEnd, now));
+            rows.AddRange(await BuildRowsAsync(slug, url, doc, today, horizonEnd, now, ct));
         }
 
         // Galleries appear on the index more than once; ExternalKey is unique.
@@ -139,11 +161,12 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    private IEnumerable<EventOccurrence> BuildRows(
-        string slug, string url, IDocument doc, DateOnly today, DateOnly horizonEnd, DateTimeOffset now)
+    private async Task<IReadOnlyList<EventOccurrence>> BuildRowsAsync(
+        string slug, string url, IDocument doc, DateOnly today, DateOnly horizonEnd, DateTimeOffset now,
+        CancellationToken ct)
     {
         var title = doc.QuerySelector("h1")?.TextContent?.Trim();
-        if (string.IsNullOrEmpty(title)) yield break;
+        if (string.IsNullOrEmpty(title)) return Array.Empty<EventOccurrence>();
 
         var info = ReadInfoBlock(doc);
         var metaDesc = doc.QuerySelector("meta[name='description']")?.GetAttribute("content")?.Trim() ?? "";
@@ -154,11 +177,13 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         var (minAge, maxAge) = TextParsing.ParseAgeRange(
             $"{ageField} {metaDesc} {title}");
 
-        // Gate: only items a baby/toddler could attend. No age signal → drop.
-        if (minAge is null || minAge > ToddlerCeilingMonths)
+        // Gate: keep only genuinely young-child items — a toddler-or-below lower
+        // bound AND (where stated) an upper bound within young-childhood. No age
+        // signal → drop.
+        if (minAge is null || minAge > ToddlerCeilingMonths || maxAge > YoungChildCeilingMonths)
         {
-            _logger.LogDebug("Science Museum: skipping {Slug} (age min={Min})", slug, minAge);
-            yield break;
+            _logger.LogDebug("Science Museum: skipping {Slug} (age {Min}-{Max})", slug, minAge, maxAge);
+            return Array.Empty<EventOccurrence>();
         }
 
         info.TryGetValue("date", out var dateField);
@@ -166,43 +191,135 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         info.TryGetValue("price", out var priceField);
         info.TryGetValue("location", out var locationField);
 
+        var (isFree, cost) = ResolvePrice(priceField, info.GetValueOrDefault("title-label"));
+
+        EventOccurrence Row(DateOnly date, TimeOnly start, TimeOnly? end, bool approx, string? notes) => new()
+        {
+            ExternalKey = $"{SourceId}:{slug}:{date:yyyy-MM-dd}:{start:HHmm}",
+            Source = SourceId,
+            Category = Category,
+            SourceUrl = url,
+            Date = date,
+            StartTime = start,
+            EndTime = end,
+            TimeApproximate = approx,
+            SessionName = title,
+            SessionNotes = notes,
+            VenueName = Venue,
+            VenueAddress = Address,
+            Postcode = Postcode,
+            MinAgeMonths = minAge,
+            MaxAgeMonths = maxAge,
+            TermTimeOnly = false,
+            IsFree = isFree,
+            Cost = cost,
+            LastSeenAt = now,
+        };
+
+        // Preferred path: a booking kid → real performances from the Tessitura feed.
+        if (ExtractBookingKid(doc) is int kid)
+        {
+            var perfs = await FetchBookingPerformancesAsync(kid, today, horizonEnd, ct);
+            var inHorizon = perfs.Where(p => p.Date >= today && p.Date <= horizonEnd).ToList();
+            if (inHorizon.Count > 0)
+            {
+                var notes = BuildNotes(metaDesc, locationField, approximate: false);
+                return inHorizon.Select(p => Row(p.Date, p.Time, null, approx: false, notes)).ToList();
+            }
+            _logger.LogDebug("Science Museum: {Slug} kid={Kid} returned no in-horizon performances; " +
+                "falling back to the Date field", slug, kid);
+        }
+
+        // Fallback: parse the human-readable Date field (galleries, un-ticketed dates).
         var schedule = ParseSchedule(dateField, timeField, today, horizonEnd);
         if (schedule is null)
         {
             _logger.LogDebug("Science Museum: {Slug} has no datable schedule (\"{Date}\")", slug, dateField);
-            yield break;
+            return Array.Empty<EventOccurrence>();
         }
 
-        var (isFree, cost) = ResolvePrice(priceField, info.GetValueOrDefault("title-label"));
+        var fallbackNotes = BuildNotes(metaDesc, locationField, schedule.Value.Approximate);
+        return schedule.Value.Dates
+            .Where(d => d >= today && d <= horizonEnd)
+            .Select(d => Row(d, schedule.Value.Start, schedule.Value.End, schedule.Value.Approximate, fallbackNotes))
+            .ToList();
+    }
 
-        var notes = BuildNotes(metaDesc, locationField, schedule.Value.Approximate);
+    // The Tessitura keyword id behind a detail page's "Book now" CTA. Scoped to
+    // the c-info-block so we get the event's own booking link, not the general
+    // "Book your free admission" banner (a different kid) elsewhere on the page.
+    private static int? ExtractBookingKid(IDocument doc)
+    {
+        var block = doc.QuerySelector("div.c-info-block");
+        var href = block?.QuerySelector("a[href*='kid=']")?.GetAttribute("href");
+        var m = Regex.Match(href ?? "", @"[?&]kid=(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var kid) ? kid : null;
+    }
 
-        foreach (var date in schedule.Value.Dates)
+    // POSTs the public booking feed for a keyword's performances and returns each
+    // as a local date + clock time. Best-effort: any failure yields an empty list
+    // so the caller falls back to the Date field rather than dropping the event.
+    private async Task<IReadOnlyList<(DateOnly Date, TimeOnly Time)>> FetchBookingPerformancesAsync(
+        int kid, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        try
         {
-            if (date < today || date > horizonEnd) continue;
-            yield return new EventOccurrence
+            var payload = JsonSerializer.Serialize(new
             {
-                ExternalKey = $"{SourceId}:{slug}:{date:yyyy-MM-dd}:{schedule.Value.Start:HHmm}",
-                Source = SourceId,
-                Category = Category,
-                SourceUrl = url,
-                Date = date,
-                StartTime = schedule.Value.Start,
-                EndTime = schedule.Value.End,
-                TimeApproximate = schedule.Value.Approximate,
-                SessionName = title,
-                SessionNotes = notes,
-                VenueName = Venue,
-                VenueAddress = Address,
-                Postcode = Postcode,
-                MinAgeMonths = minAge,
-                MaxAgeMonths = maxAge,
-                TermTimeOnly = false,
-                IsFree = isFree,
-                Cost = cost,
-                LastSeenAt = now,
-            };
+                modeOfSale = BookingModeOfSale,
+                sourceId = BookingSourceId,
+                keywordIds = new[] { kid },
+                // DateOnly.ToString rejects time specifiers, so append the literal.
+                startDate = from.ToString("yyyy-MM-dd") + "T00:00",
+                endDate = to.AddDays(1).ToString("yyyy-MM-dd") + "T00:00",
+            });
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await _http.PostAsync(BookingApiUrl, content, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Science Museum: booking feed for kid={Kid} returned {Status}", kid, (int)resp.StatusCode);
+                return Array.Empty<(DateOnly, TimeOnly)>();
+            }
+
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            var seasons = JsonSerializer.Deserialize<List<ProductionSeason>>(json, JsonOpts) ?? new();
+
+            var result = new List<(DateOnly, TimeOnly)>();
+            foreach (var perf in seasons.SelectMany(s => s.Performances ?? new()))
+            {
+                if (!perf.IsPerformanceVisible) continue;
+                if (TryParseLocalDateTime(perf.Iso8601DateString, out var d, out var t))
+                    result.Add((d, t));
+            }
+            return result;
         }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Science Museum: booking feed for kid={Kid} failed", kid);
+            return Array.Empty<(DateOnly, TimeOnly)>();
+        }
+    }
+
+    // "2026-06-06T10:00:00.0000000+01:00" → 2026-06-06, 10:00. We take the local
+    // wall-clock components verbatim (the offset already reflects BST/GMT).
+    private static bool TryParseLocalDateTime(string? iso, out DateOnly date, out TimeOnly time)
+    {
+        date = default;
+        time = default;
+        if (string.IsNullOrEmpty(iso) || iso.Length < 16 || iso[10] != 'T') return false;
+        return DateOnly.TryParse(iso[..10], out date)
+            && TimeOnly.TryParseExact(iso.Substring(11, 5), "HH:mm", out time);
+    }
+
+    private sealed record ProductionSeason
+    {
+        public List<Performance>? Performances { get; init; }
+    }
+
+    private sealed record Performance
+    {
+        public string? Iso8601DateString { get; init; }
+        public bool IsPerformanceVisible { get; init; }
     }
 
     // Pulls the c-info-block label/value rows into a dictionary keyed by the
