@@ -28,6 +28,7 @@ public static class Sources
         "mw_health_classes"              => "Moon Women's Health",
         "postal_museum_post_and_play"    => "The Postal Museum",
         "royal_parks_play_in_the_park"   => "The Royal Parks",
+        "science_museum_childrens"       => "Science Museum",
         "southbank_centre_families"      => "Southbank Centre",
         "tockify_fitzrovia"              => "Fitzrovia Community Centre",
         "va_early_years"                 => "Young V&A",

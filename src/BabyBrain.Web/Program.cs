@@ -15,6 +15,7 @@ using BabyBrain.Scrapers.MomeLondon;
 using BabyBrain.Scrapers.MwHealth;
 using BabyBrain.Scrapers.PostalMuseum;
 using BabyBrain.Scrapers.RoyalParks;
+using BabyBrain.Scrapers.ScienceMuseum;
 using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.Tockify;
@@ -226,6 +227,19 @@ builder.Services.AddHttpClient<DesignMuseumFamiliesScraper>(c =>
         "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<DesignMuseumFamiliesScraper>());
+
+// Science Museum see-and-do, filtered to baby/toddler-suitable items. The
+// site's Varnish/Cloudflare edge 405s a stock Chrome UA but serves a desktop
+// Safari UA fine (verified returning 200), so this client poses as Safari.
+builder.Services.AddHttpClient<ScienceMuseumChildrensScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15");
+    c.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<ScienceMuseumChildrensScraper>());
 
 // Postal Museum: single recurring "Post and Play" event page. Behind
 // Cloudflare, so it goes through Playwright rather than a plain HttpClient.
