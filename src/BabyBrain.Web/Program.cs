@@ -20,6 +20,7 @@ using BabyBrain.Scrapers.Shared;
 using BabyBrain.Scrapers.Southbank;
 using BabyBrain.Scrapers.TempoTots;
 using BabyBrain.Scrapers.Tockify;
+using BabyBrain.Scrapers.TogetherProject;
 using BabyBrain.Scrapers.Va;
 using BabyBrain.Scrapers.WigmoreHall;
 using BabyBrain.Scrapers.WildLondon;
@@ -251,6 +252,17 @@ builder.Services.AddHttpClient<TempoTotsNorthLondonScraper>(c =>
         "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TempoTotsNorthLondonScraper>());
+
+// The Together Project "Songs & Smiles": free intergenerational singing
+// sessions on a Squarespace page, fine over plain HTTP. Currently scoped to the
+// North + North-West London venues.
+builder.Services.AddHttpClient<SongsAndSmilesScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<SongsAndSmilesScraper>());
 
 // Postal Museum: single recurring "Post and Play" event page. Behind
 // Cloudflare, so it goes through Playwright rather than a plain HttpClient.

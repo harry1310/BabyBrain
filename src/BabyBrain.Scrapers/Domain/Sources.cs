@@ -31,6 +31,7 @@ public static class Sources
         "science_museum_childrens"       => "Science Museum",
         "southbank_centre_families"      => "Southbank Centre",
         "tempo_tots_north_london"        => "Tempo Tots North London",
+        "together_project_songs_smiles"  => "Songs & Smiles (The Together Project)",
         "tockify_fitzrovia"              => "Fitzrovia Community Centre",
         "va_early_years"                 => "Young V&A",
         "wigmore_hall_under_fives"       => "Wigmore Hall",
