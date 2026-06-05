@@ -243,15 +243,11 @@ builder.Services.AddHttpClient<ScienceMuseumChildrensScraper>(c =>
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<ScienceMuseumChildrensScraper>());
 
-// Tempo Tots North London: one weekly drop-in music class on a Wix page,
-// fine over plain HTTP with a browser-shaped UA.
-builder.Services.AddHttpClient<TempoTotsNorthLondonScraper>(c =>
-{
-    c.Timeout = TimeSpan.FromSeconds(30);
-    c.DefaultRequestHeaders.UserAgent.ParseAdd(
-        "Mozilla/5.0 (compatible; BabyBrainScraper/1.0; +https://github.com/harry1310/BabyBrain)");
-});
-builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TempoTotsNorthLondonScraper>());
+// Tempo Tots North London: one weekly drop-in music class on a Wix page.
+// Wix's edge 404s the Hetzner VPS's datacenter IP, so we go through ScraperAPI
+// (the shared singleton) rather than a plain HttpClient — see the scraper's
+// header comment.
+builder.Services.AddScoped<IScraper, TempoTotsNorthLondonScraper>();
 
 // The Together Project "Songs & Smiles": free intergenerational singing
 // sessions on a Squarespace page, fine over plain HTTP. Currently scoped to the
