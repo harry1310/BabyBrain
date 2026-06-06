@@ -182,6 +182,9 @@ else
     var SPINNER_HTML = '<span class="spinner-border spinner-border-sm text-primary" role="status" title="Scrape running…"><span class="visually-hidden">Running…</span></span>';
     var pollTimer = null;
     var feedbackEl = document.getElementById('bb-run-feedback');
+    // Sources the user manually re-ran this session — so we can report each
+    // one's outcome when it finishes (even a 1-second failure/blocked run).
+    var pendingReruns = new Set();
 
     document.getElementById('bb-run-all-btn').addEventListener('click', function () {
         feedbackEl.textContent = 'Queuing…';
@@ -207,6 +210,7 @@ else
         ev.preventDefault();
         var source = btn.getAttribute('data-source');
         if (!source) return;
+        pendingReruns.add(source);
         btn.disabled = true;
         setSpinner(source);
         fetch('/Admin/api/rerun-source', {
@@ -292,6 +296,27 @@ else
           });
     });
 
+    // After a manual Re-run finishes, read each source's freshly-rendered status
+    // cell and surface the outcome — so even a 1-second failed/blocked run gives
+    // clear confirmation (✓ / ✗ / ⛔) instead of looking like nothing happened.
+    function reportRerunOutcomes() {
+        var msgs = [];
+        pendingReruns.forEach(function (source) {
+            var cell = document.querySelector('[data-status-cell="' + cssEscape(source) + '"]');
+            var span = cell ? cell.querySelector('span') : null;
+            var symbol = span ? span.textContent.trim() : '?';
+            var detail = span ? (span.getAttribute('title') || '') : 'no status recorded';
+            msgs.push(source + ': ' + symbol + ' ' + detail);
+            if (cell) {
+                cell.style.transition = 'background-color 0.4s';
+                cell.style.backgroundColor = '#fff3cd';
+                setTimeout(function () { cell.style.backgroundColor = ''; }, 2500);
+            }
+        });
+        pendingReruns.clear();
+        if (msgs.length) feedbackEl.textContent = 'Finished — ' + msgs.join('  |  ');
+    }
+
     function setSpinner(source) {
         var cell = document.querySelector('[data-status-cell="' + cssEscape(source) + '"]');
         if (cell) cell.innerHTML = SPINNER_HTML;
@@ -338,8 +363,9 @@ else
                 var table = document.getElementById('bb-history-table');
                 if (table) {
                     table.outerHTML = html;
-                    feedbackEl.textContent = 'Scrape finished.';
                     renderCachePanel();
+                    if (pendingReruns.size > 0) reportRerunOutcomes();
+                    else feedbackEl.textContent = 'Scrape finished.';
                 } else {
                     window.location.reload();
                 }

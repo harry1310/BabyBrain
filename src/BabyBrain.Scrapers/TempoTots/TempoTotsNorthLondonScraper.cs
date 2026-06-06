@@ -116,7 +116,11 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
             {
                 return await _http.GetStringAsync(PageUrl, ct);
             }
-            catch (HttpRequestException ex)
+            // Retry HTTP errors (Wix 404s) and request timeouts
+            // (TaskCanceledException), but not a genuine cancellation.
+            catch (Exception ex) when (
+                ex is HttpRequestException ||
+                (ex is TaskCanceledException && !ct.IsCancellationRequested))
             {
                 last = ex;
                 if (attempt < FetchAttempts)

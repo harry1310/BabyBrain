@@ -115,7 +115,12 @@ public sealed class ScrapeRunner
             await NotifyAlertSinkAsync(scraper.SourceId, success: true, error: null, ct);
             return new ScraperOutcome(scraper.SourceId, true, rows.Count, null, completedAt);
         }
-        catch (OperationCanceledException) { throw; }
+        // Only treat this as a real cancellation (host shutdown / ct tripped)
+        // when the token actually fired. Otherwise it's almost always an
+        // HttpClient *timeout* (TaskCanceledException : OperationCanceledException)
+        // from a slow/flaky site — which must be recorded as a failure (and show
+        // a ✗) rather than silently escaping unrecorded.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (ScraperApiCreditsExhaustedException ex)
         {
             // Billing state, not a scraper fault: record a distinct "blocked"
