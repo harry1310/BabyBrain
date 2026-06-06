@@ -47,6 +47,12 @@ public sealed class SouthbankCentreScraper : IScraper
     // BabyBrain covers under-5s. Mirrors the British Museum scraper.
     private const int UnderFiveCutoffMonths = 60;
 
+    // How long a detail-page age probe stays good before we re-fetch. An event's
+    // age guidance is effectively static, so a month turns ~8 paid detail fetches
+    // per daily run into ~1 per event per month — the bulk of Southbank's
+    // ScraperAPI credit spend. Bumped here if SBC starts correcting ages often.
+    private static readonly TimeSpan AgeCacheTtl = TimeSpan.FromDays(30);
+
     // Used when the hub card gives a date but no time. Southbank no longer
     // publishes exact session times on the public site; this is an admitted
     // guess. Rows built with it carry TimeApproximate = true so the UI flags it.
@@ -56,11 +62,13 @@ public sealed class SouthbankCentreScraper : IScraper
     public string Category => Categories.Concert;
 
     private readonly ScrapingApiFetcher _api;
+    private readonly IResolvedAgeCache _ageCache;
     private readonly ILogger<SouthbankCentreScraper> _logger;
 
-    public SouthbankCentreScraper(ScrapingApiFetcher api, ILogger<SouthbankCentreScraper> logger)
+    public SouthbankCentreScraper(ScrapingApiFetcher api, IResolvedAgeCache ageCache, ILogger<SouthbankCentreScraper> logger)
     {
         _api = api;
+        _ageCache = ageCache;
         _logger = logger;
     }
 
@@ -99,8 +107,15 @@ public sealed class SouthbankCentreScraper : IScraper
     // behaviour and avoids killing the row on a transient render timeout.
     private async Task<(int? min, int? max)> ResolveAgeRangeAsync(Card card, CancellationToken ct)
     {
+        // Cheapest signal first: the card's own text needs no fetch.
         var (m, x) = TextParsing.ParseAgeRange(card.Title + " " + card.Summary);
         if (m is not null || x is not null) return (m, x);
+
+        // Next cheapest: a recent probe of this event's detail page. The fetch
+        // below is a premium-priced ScraperAPI call and the age is static, so
+        // reuse a probe taken within the TTL rather than re-fetching each run.
+        var cached = await _ageCache.TryGetAsync(SourceId, card.Url, AgeCacheTtl, ct);
+        if (cached is { } hit) return (hit.MinAgeMonths, hit.MaxAgeMonths);
 
         try
         {
@@ -108,14 +123,22 @@ public sealed class SouthbankCentreScraper : IScraper
             var detail = await BrowsingContext.New(Configuration.Default)
                 .OpenAsync(req => req.Content(detailHtml), ct);
 
+            var resolved = ((int?)null, (int?)null);
             foreach (var item in detail.QuerySelectorAll(".c-event-need-to-know__item"))
             {
                 var title = item.QuerySelector(".c-event-need-to-know__title")?.TextContent.Trim();
                 if (!string.Equals(title, "Age guidance", StringComparison.OrdinalIgnoreCase)) continue;
                 var info = item.QuerySelector(".c-event-need-to-know__info")?.TextContent.Trim();
                 if (string.IsNullOrEmpty(info)) break;
-                return TextParsing.ParseAgeRange(info);
+                resolved = TextParsing.ParseAgeRange(info);
+                break;
             }
+
+            // Cache the probe outcome — including "no age guidance found" (both
+            // null) — so this event isn't re-fetched until the TTL lapses. Only
+            // reached on a successful fetch, so failures aren't cached.
+            await _ageCache.SetAsync(SourceId, card.Url, resolved.Item1, resolved.Item2, ct);
+            return resolved;
         }
         catch (Exception ex)
         {

@@ -13,6 +13,7 @@ public class BabyBrainDbContext : DbContext
     public DbSet<Geocode> Geocodes => Set<Geocode>();
     public DbSet<ScrapeRun> ScrapeRuns => Set<ScrapeRun>();
     public DbSet<SourceSuggestion> SourceSuggestions => Set<SourceSuggestion>();
+    public DbSet<ResolvedAgeCacheEntry> ResolvedAgeCache => Set<ResolvedAgeCacheEntry>();
 
     // ISO-8601 with offset, single space separator. Adding an explicit
     // converter lets the LINQ translator see a string-typed column (so
@@ -75,5 +76,11 @@ public class BabyBrainDbContext : DbContext
         ss.Property(x => x.ReviewedAt).HasConversion(
             dto => dto == null ? null : dto.Value.ToString(DateTimeOffsetWriteFormat, CultureInfo.InvariantCulture),
             s => s == null ? null : DateTimeOffset.ParseExact(s, DateTimeOffsetReadFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal));
+
+        var ac = mb.Entity<ResolvedAgeCacheEntry>();
+        // One probe per event; lookups are always by (Source, SourceUrl).
+        ac.HasIndex(x => new { x.Source, x.SourceUrl }).IsUnique();
+        ac.Property(x => x.SourceUrl).HasMaxLength(500);
+        ac.Property(x => x.CheckedAt).HasConversion(DateTimeOffsetConverter);
     }
 }

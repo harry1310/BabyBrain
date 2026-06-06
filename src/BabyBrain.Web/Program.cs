@@ -71,6 +71,9 @@ builder.Services.AddSingleton<UkBankHolidayService>();
 builder.Services.AddHostedService<UkBankHolidayRefreshService>();
 builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
+// Persistent cache of detail-page age probes, so the Southbank scraper doesn't
+// re-pay ScraperAPI credits re-fetching unchanged event ages every daily run.
+builder.Services.AddScoped<IResolvedAgeCache, EfResolvedAgeCache>();
 builder.Services.AddScoped<ScrapeRunner>();
 
 // Alerting: when BABYBRAIN_GH_TOKEN + BABYBRAIN_GH_REPO are set (e.g.
