@@ -45,12 +45,12 @@ public sealed class BritishMuseumScraper : IScraper
     public string SourceId => "british_museum_family";
     public string Category => Categories.Museum;
 
-    private readonly ScrapingApiFetcher _api;
+    private readonly IContentFetcher _fetcher;
     private readonly ILogger<BritishMuseumScraper> _logger;
 
-    public BritishMuseumScraper(ScrapingApiFetcher api, ILogger<BritishMuseumScraper> logger)
+    public BritishMuseumScraper(IContentFetcher fetcher, ILogger<BritishMuseumScraper> logger)
     {
-        _api = api;
+        _fetcher = fetcher;
         _logger = logger;
     }
 
@@ -72,8 +72,9 @@ public sealed class BritishMuseumScraper : IScraper
         string hubHtml;
         try
         {
-            hubHtml = await _api.FetchAsync(HubUrl, ct);
+            hubHtml = await _fetcher.FetchAsync(SourceId, HubUrl, CacheTtl.Listing, ct: ct);
         }
+        catch (ScraperApiCreditsExhaustedException) { throw; } // billing state — let the runner mark it blocked
         catch (Exception ex)
         {
             throw new InvalidOperationException(
@@ -91,7 +92,7 @@ public sealed class BritishMuseumScraper : IScraper
             try
             {
                 var sw = Stopwatch.StartNew();
-                var detailHtml = await _api.FetchAsync(teaser.Url, ct, renderJs: true);
+                var detailHtml = await _fetcher.FetchAsync(SourceId, teaser.Url, CacheTtl.Detail, renderJs: true, ct: ct);
                 sw.Stop();
                 var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
                 var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
@@ -100,6 +101,7 @@ public sealed class BritishMuseumScraper : IScraper
                             $"({detailHtml.Length} chars): {note}. ");
             }
             catch (OperationCanceledException) { throw; }
+            catch (ScraperApiCreditsExhaustedException) { throw; } // billing state — blocks the whole run
             catch (Exception ex)
             {
                 diag.Append($"[{teaser.Title}] FETCH FAILED: " +

@@ -13,8 +13,10 @@ public class ScrapeRun
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset CompletedAt { get; set; }
 
-    // "success" or "failed". String rather than enum so adding states later
-    // (e.g. "partial", "skipped") doesn't need a migration.
+    // "success", "failed", or "blocked". String rather than enum so adding
+    // states later doesn't need a migration. "blocked" = an upstream billing
+    // state (ScraperAPI credits exhausted), not a scraper fault — surfaced with
+    // its own admin symbol and deliberately not alerted as a GitHub issue.
     public required string Status { get; set; }
 
     // Rows produced by the scraper for this run. Zero on failure.
@@ -26,4 +28,5 @@ public class ScrapeRun
 
     public const string StatusSuccess = "success";
     public const string StatusFailed = "failed";
+    public const string StatusBlocked = "blocked";
 }

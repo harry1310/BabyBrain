@@ -71,9 +71,16 @@ builder.Services.AddSingleton<UkBankHolidayService>();
 builder.Services.AddHostedService<UkBankHolidayRefreshService>();
 builder.Services.AddScoped<GeocodingService>();
 builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
-// Persistent cache of detail-page age probes, so the Southbank scraper doesn't
-// re-pay ScraperAPI credits re-fetching unchanged event ages every daily run.
-builder.Services.AddScoped<IResolvedAgeCache, EfResolvedAgeCache>();
+
+// Content-fetch layer for the ScraperAPI sources (British Museum, Southbank,
+// Tempo Tots): a persistent cache in front of an ordered backend chain. Backends
+// are tried in registration order — add the laptop backend BEFORE ScrapingApiBackend
+// (Phase 2) to make the home laptop first choice and ScraperAPI the fallback.
+builder.Services.AddScoped<IFetchCache, EfFetchCache>();
+builder.Services.AddScoped<IScrapeCacheControl, ScrapeCacheControl>();
+builder.Services.AddSingleton<IBackendFetcher, ScrapingApiBackend>();
+builder.Services.AddScoped<IContentFetcher, CachingContentFetcher>();
+
 builder.Services.AddScoped<ScrapeRunner>();
 
 // Alerting: when BABYBRAIN_GH_TOKEN + BABYBRAIN_GH_REPO are set (e.g.
@@ -444,7 +451,8 @@ app.MapPost("/Admin/api/rerun-source", (
         {
             using var scope = services.CreateScope();
             var runner = scope.ServiceProvider.GetRequiredService<ScrapeRunner>();
-            await runner.RunByIdAsync(req.Source);
+            // Manual re-run: bypass the fetch cache so it fetches live.
+            await runner.RunByIdAsync(req.Source, forceFresh: true);
         }
         catch (Exception ex) { logger.LogError(ex, "Background rerun failed for {Source}", req.Source); }
         finally { tracker.Finish(req.Source); }
@@ -472,7 +480,7 @@ app.MapPost("/Admin/api/rerun-all", (
         var runner = scope.ServiceProvider.GetRequiredService<ScrapeRunner>();
         foreach (var src in queued)
         {
-            try { await runner.RunByIdAsync(src); }
+            try { await runner.RunByIdAsync(src, forceFresh: true); }
             catch (Exception ex) { logger.LogError(ex, "Background rerun-all failed for {Source}", src); }
             finally { tracker.Finish(src); }
         }
@@ -483,6 +491,22 @@ app.MapPost("/Admin/api/rerun-all", (
 
 app.MapGet("/Admin/api/source-status", (IScrapeStatusTracker tracker) =>
     Results.Json(new { running = tracker.RunningSources }));
+
+// Fetch-cache visibility + manual override. Stats drive the Admin "Fetch cache"
+// panel; clear drops a source's cached pages so its next run fetches live (the
+// per-source Re-run already bypasses the cache, but this forces staleness now).
+app.MapGet("/Admin/api/cache-status", async (IFetchCache cache, CancellationToken ct) =>
+    Results.Json(await cache.GetStatsAsync(ct)));
+
+app.MapPost("/Admin/api/clear-cache", async (
+    ClearCacheRequest req, IFetchCache cache, ILogger<Program> logger, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Source))
+        return Results.BadRequest(new { error = "source required" });
+    var removed = await cache.ClearAsync(req.Source, ct);
+    logger.LogInformation("Admin cleared fetch cache for {Source}: {Removed} entries", req.Source, removed);
+    return Results.Json(new { removed });
+});
 
 // Public "report a mistake" endpoint — fired by the dialog on every event
 // card. Idempotent; re-reporting just updates the timestamp + field. The
@@ -628,6 +652,7 @@ app.MapPost("/Admin/api/raise-issue", async (
 app.Run();
 
 public sealed record RerunSourceRequest(string Source);
+public sealed record ClearCacheRequest(string Source);
 public sealed record ReportEventRequest(string ExternalKey, string? ReportedField);
 public sealed record SuggestSourceRequest(string? Url);
 public sealed record MarkSuggestionRequest(int Id);

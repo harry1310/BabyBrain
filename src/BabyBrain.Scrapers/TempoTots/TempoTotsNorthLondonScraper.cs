@@ -18,11 +18,12 @@ namespace BabyBrain.Scrapers.TempoTots;
 // the page and require the venue name to be present, so a site rewrite fails
 // loudly (→ a claude-fix issue) rather than silently emitting stale rows.
 //
-// Fetched via ScraperAPI, not a plain HttpClient: Wix's edge serves a 404 to
-// the Hetzner VPS's datacenter IP (verified — the page returns 200 from a
-// residential IP and the parser runs clean, but prod 404s every run). Routing
-// through ScraperAPI's residential proxy clears the block, the same reason the
-// British Museum and Southbank scrapers use it.
+// Fetched through the shared content fetcher (home laptop first, ScraperAPI
+// fallback, with a persistent cache), not a plain HttpClient: Wix's edge serves
+// a 404 to the Hetzner VPS's datacenter IP (verified — the page returns 200
+// from a residential IP and the parser runs clean, but prod 404s every run). A
+// residential hop clears the block, the same reason the British Museum and
+// Southbank scrapers use it.
 //
 // Recurrence is implicit weekly on the named day; we materialise one row per
 // occurrence across the horizon, the same model as the Camden / Postal Museum
@@ -38,9 +39,9 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
     public string SourceId => "tempo_tots_north_london";
     public string Category => Categories.Class;
 
-    private readonly ScrapingApiFetcher _api;
+    private readonly IContentFetcher _fetcher;
 
-    public TempoTotsNorthLondonScraper(ScrapingApiFetcher api) => _api = api;
+    public TempoTotsNorthLondonScraper(IContentFetcher fetcher) => _fetcher = fetcher;
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
@@ -48,7 +49,7 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
         var horizonEnd = today.AddDays(horizonDays);
         var now = DateTimeOffset.UtcNow;
 
-        var html = await _api.FetchAsync(PageUrl, ct);
+        var html = await _fetcher.FetchAsync(SourceId, PageUrl, CacheTtl.Listing, ct: ct);
         var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
 
         // One run-together string of the page's visible text. AngleSharp has

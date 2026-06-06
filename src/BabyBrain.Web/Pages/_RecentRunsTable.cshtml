@@ -31,6 +31,10 @@
                 {
                     <span class="text-muted" title="No runs yet">—</span>
                 }
+                else if (latest.Status == ScrapeRun.StatusBlocked)
+                {
+                    <span class="text-secondary fs-4" title="Blocked: ScraperAPI credits exhausted — a billing state, not a scraper fault. No issue raised; clears when credits return.">⛔</span>
+                }
                 else if (latest.Status == ScrapeRun.StatusFailed)
                 {
                     <span class="text-danger fs-4" title="Last run failed">✗</span>
@@ -50,13 +54,18 @@
                 {
                     var run = h.Recent[i];
                     var isFail = run.Status == ScrapeRun.StatusFailed;
-                    var isDrop = !isFail && AdminModel.IsDrop(h.Recent, i);
-                    var classes = isFail ? "text-danger" : isDrop ? "text-danger fw-semibold" : "";
+                    var isBlocked = run.Status == ScrapeRun.StatusBlocked;
+                    var isDrop = !isFail && !isBlocked && AdminModel.IsDrop(h.Recent, i);
+                    var classes = isFail ? "text-danger" : isBlocked ? "text-secondary" : isDrop ? "text-danger fw-semibold" : "";
                     var title = $"{run.StartedAt:yyyy-MM-dd HH:mm} UTC" + (run.Error is null ? "" : $"\n{run.Error}");
                     <td class="text-end @classes" title="@title">
                         @if (isFail)
                         {
                             <text>✗</text>
+                        }
+                        else if (isBlocked)
+                        {
+                            <text>⛔</text>
                         }
                         else
                         {

@@ -1,4 +1,5 @@
 using BabyBrain.Scrapers;
+using BabyBrain.Scrapers.Shared;
 using BabyBrain.Web.Data;
 
 namespace BabyBrain.Web.Services;
@@ -17,14 +18,16 @@ public sealed class ScrapeRunner
     private readonly IEnumerable<IScraper> _scrapers;
     private readonly GeocodingService _geocoder;
     private readonly IScrapeAlertSink _alertSink;
+    private readonly IScrapeCacheControl _cacheControl;
     private readonly ILogger<ScrapeRunner> _logger;
 
-    public ScrapeRunner(IScrapeStore store, IEnumerable<IScraper> scrapers, GeocodingService geocoder, IScrapeAlertSink alertSink, ILogger<ScrapeRunner> logger)
+    public ScrapeRunner(IScrapeStore store, IEnumerable<IScraper> scrapers, GeocodingService geocoder, IScrapeAlertSink alertSink, IScrapeCacheControl cacheControl, ILogger<ScrapeRunner> logger)
     {
         _store = store;
         _scrapers = scrapers;
         _geocoder = geocoder;
         _alertSink = alertSink;
+        _cacheControl = cacheControl;
         _logger = logger;
     }
 
@@ -39,12 +42,15 @@ public sealed class ScrapeRunner
         return new ScrapeResult(outcomes, await GeocodeAsync(ct));
     }
 
-    // Returns null when no scraper with that SourceId is registered.
-    public async Task<ScrapeResult?> RunByIdAsync(string sourceId, int horizonDays = 90, CancellationToken ct = default)
+    // Returns null when no scraper with that SourceId is registered. forceFresh
+    // bypasses the fetch cache for this run (set by the Admin "Re-run" buttons),
+    // so a manual re-run always fetches live and refreshes the cache.
+    public async Task<ScrapeResult?> RunByIdAsync(string sourceId, bool forceFresh = false, int horizonDays = 90, CancellationToken ct = default)
     {
         var scraper = _scrapers.FirstOrDefault(s => s.SourceId == sourceId);
         if (scraper is null) return null;
 
+        _cacheControl.ForceFresh = forceFresh;
         var outcome = await RunOneAsync(scraper, horizonDays, ct);
         return new ScrapeResult(new[] { outcome }, await GeocodeAsync(ct));
     }
@@ -110,6 +116,27 @@ public sealed class ScrapeRunner
             return new ScraperOutcome(scraper.SourceId, true, rows.Count, null, completedAt);
         }
         catch (OperationCanceledException) { throw; }
+        catch (ScraperApiCreditsExhaustedException ex)
+        {
+            // Billing state, not a scraper fault: record a distinct "blocked"
+            // status and deliberately skip the alert sink so no claude-fix issue
+            // is raised. Clears itself on the next run once credits return.
+            var completedAt = DateTimeOffset.UtcNow;
+            var detail = Truncate(ex.Message, ErrorMaxLength);
+            _logger.LogWarning("Scraper {Source} blocked: ScraperAPI credits exhausted", scraper.SourceId);
+
+            await TryRecordRunAsync(new ScrapeRun
+            {
+                Source = scraper.SourceId,
+                StartedAt = startedAt,
+                CompletedAt = completedAt,
+                Status = ScrapeRun.StatusBlocked,
+                RowsScraped = 0,
+                Error = detail,
+            }, ct);
+
+            return new ScraperOutcome(scraper.SourceId, false, 0, detail, completedAt);
+        }
         catch (Exception ex)
         {
             var completedAt = DateTimeOffset.UtcNow;
@@ -144,9 +171,13 @@ public sealed class ScrapeRunner
             if (success)
             {
                 // Newest-first: [0] is the current success. Fire recovery only if
-                // the immediately previous run was a failure — otherwise we'd
-                // re-alert on every subsequent success.
-                if (history.Count > 1 && history[1].Status == ScrapeRun.StatusFailed)
+                // the previous *decisive* run was a failure — otherwise we'd
+                // re-alert on every subsequent success. 'blocked' (billing) runs
+                // neither raise nor close issues, so skip them: a
+                // failed → blocked → success sequence should still close the
+                // original issue.
+                var priorDecisive = history.Skip(1).FirstOrDefault(r => r.Status != ScrapeRun.StatusBlocked);
+                if (priorDecisive is not null && priorDecisive.Status == ScrapeRun.StatusFailed)
                 {
                     await _alertSink.OnRecoveryAsync(sourceId, ct);
                 }

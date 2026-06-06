@@ -54,6 +54,17 @@ public sealed class ScrapingApiFetcher
             // actual reason (rate limit, bad key, upstream block).
             var body = await resp.Content.ReadAsStringAsync(ct);
             var preview = body.Length > 400 ? body[..400] + "…" : body;
+
+            // Credit exhaustion is a billing state, not a scraper fault. Surface
+            // it as a distinct type so the runner can mark the run blocked and
+            // skip filing a claude-fix issue.
+            if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden &&
+                body.Contains("exhausted the API Credits", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ScraperApiCreditsExhaustedException(
+                    $"ScraperAPI fetch of {url} blocked: monthly API credits exhausted. Body: {preview}");
+            }
+
             throw new InvalidOperationException(
                 $"ScraperAPI fetch of {url} failed: {(int)resp.StatusCode} {resp.ReasonPhrase}. Body: {preview}");
         }

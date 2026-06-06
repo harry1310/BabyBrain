@@ -20,12 +20,22 @@
     Status icon shows the latest run per source:
     <span class="text-success fw-semibold">✓</span> success ·
     <span class="text-danger fw-semibold">✗</span> failed ·
+    <span class="text-secondary fw-semibold">⛔</span> blocked (ScraperAPI credits exhausted — not a fault, no issue raised) ·
     <span class="text-warning fw-semibold">⚠</span> succeeded but row count dropped to half or less of the previous successful run ·
     spinner while a scrape is running.
     Cells show the last 5 runs.
 </p>
 
 <partial name="_RecentRunsTable" model="Model" />
+
+<h2 class="mt-5">Fetch cache</h2>
+<p class="text-muted small">
+    Cached pages for the ScraperAPI-backed sources (listings kept ~2 days, detail
+    pages ~7 days) so daily runs don't re-spend credits. A source's
+    <strong>Re-run</strong> already bypasses the cache; use <strong>Clear</strong>
+    to drop its cached pages so the next scheduled run fetches live.
+</p>
+<div id="bb-cache-panel" class="small text-muted">Loading cache status…</div>
 
 <h2 class="mt-5">Reported events</h2>
 <p class="text-muted small">
@@ -329,6 +339,7 @@ else
                 if (table) {
                     table.outerHTML = html;
                     feedbackEl.textContent = 'Scrape finished.';
+                    renderCachePanel();
                 } else {
                     window.location.reload();
                 }
@@ -431,9 +442,54 @@ else
         return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; });
     }
 
-    // On load — if the server marked any sources as already running (e.g. the
-    // user reloaded mid-scrape), pick up polling so the page refreshes when
-    // they finish.
+    // Fetch-cache panel: list cached-page counts + oldest age per source, each
+    // with a Clear button.
+    function renderCachePanel() {
+        var panel = document.getElementById('bb-cache-panel');
+        if (!panel) return;
+        fetch('/Admin/api/cache-status')
+            .then(parseJson)
+            .then(function (stats) {
+                if (!stats || stats.length === 0) { panel.textContent = 'Cache is empty.'; return; }
+                var now = Date.now();
+                var rows = stats.map(function (s) {
+                    var oldest = s.oldestFetchedAt ? new Date(s.oldestFetchedAt) : null;
+                    var ageTxt = oldest ? (Math.round((now - oldest.getTime()) / 3600000) + 'h ago') : '—';
+                    return '<tr>' +
+                        '<td class="font-monospace small">' + s.source + '</td>' +
+                        '<td class="text-end">' + s.entries + '</td>' +
+                        '<td class="text-end">' + ageTxt + '</td>' +
+                        '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-secondary bb-clear-cache-btn" data-source="' + s.source + '">Clear</button></td>' +
+                        '</tr>';
+                }).join('');
+                panel.innerHTML =
+                    '<table class="table table-sm align-middle" style="max-width:560px">' +
+                    '<thead><tr><th>Source</th><th class="text-end">Cached pages</th><th class="text-end">Oldest</th><th></th></tr></thead>' +
+                    '<tbody>' + rows + '</tbody></table>';
+            })
+            .catch(function () { panel.textContent = 'Could not load cache status.'; });
+    }
+
+    document.body.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('.bb-clear-cache-btn');
+        if (!btn) return;
+        ev.preventDefault();
+        var source = btn.getAttribute('data-source');
+        if (!source) return;
+        btn.disabled = true;
+        btn.textContent = 'Clearing…';
+        fetch('/Admin/api/clear-cache', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: source })
+        }).then(parseJson).then(function () { renderCachePanel(); })
+          .catch(function () { btn.disabled = false; btn.textContent = 'Clear'; });
+    });
+
+    // On load — populate the fetch-cache panel, and if the server marked any
+    // sources as already running (e.g. the user reloaded mid-scrape), pick up
+    // polling so the page refreshes when they finish.
+    renderCachePanel();
     @if (Model.RunningSources.Count > 0)
     {
         <text>startPolling();</text>
