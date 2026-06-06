@@ -87,10 +87,12 @@ var laptopFetchUrl = builder.Configuration["BABYBRAIN_LAPTOP_FETCH_URL"];
 var laptopFetchToken = builder.Configuration["BABYBRAIN_LAPTOP_FETCH_TOKEN"];
 if (!string.IsNullOrWhiteSpace(laptopFetchUrl) && !string.IsNullOrWhiteSpace(laptopFetchToken))
 {
-    // Generous timeout: a browser render (CF clear + hydration) over the tunnel
-    // can take tens of seconds. A laptop that's off fails instantly (connection
-    // refused through the dead tunnel), so this only bounds the slow-render case.
-    builder.Services.AddHttpClient("laptopfetch", c => c.Timeout = TimeSpan.FromSeconds(60));
+    // Generous timeout: a single page render (CF clear up to ~25s + load +
+    // hydration settle) over the tunnel can take well over a minute — local
+    // end-to-end tests showed individual heavy renders (British Museum detail)
+    // approaching this. A laptop that's off fails instantly (connection refused
+    // through the dead tunnel), so this only bounds the slow-render case.
+    builder.Services.AddHttpClient("laptopfetch", c => c.Timeout = TimeSpan.FromSeconds(120));
     builder.Services.AddSingleton<IBackendFetcher>(sp => new LaptopBackend(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient("laptopfetch"),
         laptopFetchUrl!, laptopFetchToken!));
