@@ -14,9 +14,27 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
     private IBrowser? _browser;
     private readonly IHtmlArchive _archive;
 
+    // Optional browser channel ("chrome" to drive the installed Google Chrome
+    // instead of Playwright's bundled Chromium) and headless toggle. The laptop
+    // fetch service uses real Chrome because Cloudflare flags bundled headless
+    // Chromium; the VPS scrapers keep the default (bundled, headless) since no
+    // system Chrome is installed there.
+    private readonly string? _channel;
+    private readonly bool _headless;
+    private readonly string[] _extraArgs;
+
     public PlaywrightFetcher() : this(NullHtmlArchive.Instance) { }
 
-    public PlaywrightFetcher(IHtmlArchive archive) => _archive = archive;
+    public PlaywrightFetcher(IHtmlArchive archive, string? browserChannel = null, bool headless = true, string[]? extraArgs = null)
+    {
+        _archive = archive;
+        _channel = browserChannel;
+        _headless = headless;
+        _extraArgs = extraArgs ?? Array.Empty<string>();
+    }
+
+    public PlaywrightFetcher(string? browserChannel, bool headless = true, string[]? extraArgs = null)
+        : this(NullHtmlArchive.Instance, browserChannel, headless, extraArgs) { }
 
     // Default UA for rendered fetches. Overridable per-call via the userAgent
     // argument — some sites block specific UA strings (Bach to Baby's WAF 403s
@@ -71,6 +89,63 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
         }
     }
 
+    // Generic render with no known selector — used by the laptop fetch service,
+    // which proxies arbitrary URLs. Loads the page in a real browser (which
+    // clears a Cloudflare interstitial that a plain HTTP client can't), waits
+    // for the challenge to drop and the DOM to settle, then returns the HTML.
+    public async Task<string> FetchRenderedHtmlAsync(string url, CancellationToken ct = default)
+    {
+        await EnsureBrowserAsync(ct);
+
+        // Native UA + client hints — a spoofed UA disagreeing with the hints is
+        // a tell some Cloudflare configs flag.
+        var context = await _browser!.NewContextAsync(new() { Locale = "en-GB" });
+        // Mask the automation tell some Cloudflare configs check.
+        await context.AddInitScriptAsync(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });");
+        try
+        {
+            var page = await context.NewPageAsync();
+            await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 60_000 });
+
+            await WaitForCloudflareAsync(page, ct);
+
+            // Best-effort settle for client-side hydration (e.g. the British
+            // Museum occurrence accordion). NetworkIdle never fires on some sites
+            // (constant analytics), so cap it and fall through to a fixed wait.
+            try { await page.WaitForLoadStateAsync(LoadState.NetworkIdle, new() { Timeout = 5_000 }); }
+            catch { /* analytics chatter — proceed */ }
+            await page.WaitForTimeoutAsync(1_500);
+
+            var html = await page.ContentAsync();
+            await _archive.SaveAsync(url, html, ct);
+            return html;
+        }
+        finally
+        {
+            await context.CloseAsync();
+        }
+    }
+
+    // Cloudflare's "Just a moment…" interstitial auto-navigates to the real page
+    // once its JS executes in a genuine browser. Poll until the tell-tale markers
+    // are gone (or give up after ~25s and return whatever's there).
+    private static async Task WaitForCloudflareAsync(IPage page, CancellationToken ct)
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var title = await page.TitleAsync();
+            var content = await page.ContentAsync();
+            var challenged =
+                title.Contains("Just a moment", StringComparison.OrdinalIgnoreCase) ||
+                content.Contains("challenge-platform", StringComparison.OrdinalIgnoreCase) ||
+                content.Contains("cf-browser-verification", StringComparison.OrdinalIgnoreCase);
+            if (!challenged) return;
+            await page.WaitForTimeoutAsync(1_000);
+        }
+    }
+
     private async Task EnsureBrowserAsync(CancellationToken ct)
     {
         if (_browser is not null) return;
@@ -78,7 +153,10 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
         await InstallGate.WaitAsync(ct);
         try
         {
-            if (!_installed)
+            // Only install bundled Chromium when we're going to use it. With a
+            // system channel ("chrome") we drive the already-installed browser,
+            // so skip the download.
+            if (!_installed && _channel is null)
             {
                 var exit = Microsoft.Playwright.Program.Main(new[] { "install", "chromium" });
                 if (exit != 0) throw new InvalidOperationException($"Playwright install failed with exit code {exit}");
@@ -91,7 +169,15 @@ public sealed class PlaywrightFetcher : IAsyncDisposable
         }
 
         _playwright = await Playwright.CreateAsync();
-        _browser = await _playwright.Chromium.LaunchAsync(new() { Headless = true });
+        _browser = await _playwright.Chromium.LaunchAsync(new()
+        {
+            Headless = _headless,
+            Channel = _channel,
+            // Drop the obvious "navigator.webdriver" automation tell, plus any
+            // caller-supplied args (the laptop service passes --headless=new to
+            // get Chrome's less-detectable new headless mode).
+            Args = new[] { "--disable-blink-features=AutomationControlled" }.Concat(_extraArgs).ToArray(),
+        });
     }
 
     public async ValueTask DisposeAsync()

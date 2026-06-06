@@ -78,6 +78,23 @@ builder.Services.AddScoped<IScrapeStore, EfScrapeStore>();
 // (Phase 2) to make the home laptop first choice and ScraperAPI the fallback.
 builder.Services.AddScoped<IFetchCache, EfFetchCache>();
 builder.Services.AddScoped<IScrapeCacheControl, ScrapeCacheControl>();
+
+// Laptop backend (first choice) — only when configured. Registered BEFORE
+// ScrapingApiBackend so the chain tries the home laptop first and falls back to
+// ScraperAPI when it's off. Needs the reverse-SSH tunnel + the laptop service
+// (see docs/laptop-fetch.md).
+var laptopFetchUrl = builder.Configuration["BABYBRAIN_LAPTOP_FETCH_URL"];
+var laptopFetchToken = builder.Configuration["BABYBRAIN_LAPTOP_FETCH_TOKEN"];
+if (!string.IsNullOrWhiteSpace(laptopFetchUrl) && !string.IsNullOrWhiteSpace(laptopFetchToken))
+{
+    // Generous timeout: a browser render (CF clear + hydration) over the tunnel
+    // can take tens of seconds. A laptop that's off fails instantly (connection
+    // refused through the dead tunnel), so this only bounds the slow-render case.
+    builder.Services.AddHttpClient("laptopfetch", c => c.Timeout = TimeSpan.FromSeconds(60));
+    builder.Services.AddSingleton<IBackendFetcher>(sp => new LaptopBackend(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("laptopfetch"),
+        laptopFetchUrl!, laptopFetchToken!));
+}
 builder.Services.AddSingleton<IBackendFetcher, ScrapingApiBackend>();
 builder.Services.AddScoped<IContentFetcher, CachingContentFetcher>();
 
@@ -253,11 +270,18 @@ builder.Services.AddHttpClient<ScienceMuseumChildrensScraper>(c =>
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<ScienceMuseumChildrensScraper>());
 
-// Tempo Tots North London: one weekly drop-in music class on a Wix page.
-// Wix's edge 404s the Hetzner VPS's datacenter IP, so we go through ScraperAPI
-// (the shared singleton) rather than a plain HttpClient — see the scraper's
-// header comment.
-builder.Services.AddScoped<IScraper, TempoTotsNorthLondonScraper>();
+// Tempo Tots North London: one weekly drop-in music class on a flaky Wix page.
+// Plain browser-UA HttpClient with in-scraper retries — not worth a ScraperAPI
+// credit for a single recurring class (see the scraper's header comment).
+builder.Services.AddHttpClient<TempoTotsNorthLondonScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15");
+    c.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TempoTotsNorthLondonScraper>());
 
 // The Together Project "Songs & Smiles": free intergenerational singing
 // sessions on a Squarespace page, fine over plain HTTP. Currently scoped to the

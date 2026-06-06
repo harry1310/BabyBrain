@@ -10,5 +10,10 @@ public interface IBackendFetcher
     // "scraperapi").
     string Name { get; }
 
+    // Whether this backend can serve the given request. The laptop backend does
+    // plain GETs only, so it returns false for renderJs and the chain skips it
+    // (no logged failure) and lets ScraperAPI handle the render.
+    bool Supports(bool renderJs);
+
     Task<string> FetchAsync(string url, bool renderJs, CancellationToken ct = default);
 }

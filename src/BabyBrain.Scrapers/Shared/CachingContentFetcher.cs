@@ -45,13 +45,17 @@ public sealed class CachingContentFetcher : IContentFetcher
             }
         }
 
-        if (_backends.Count == 0)
-            throw new InvalidOperationException("No content-fetch backends are configured.");
+        // Only backends that can serve this request (e.g. the laptop backend
+        // does plain GETs but not JS rendering).
+        var eligible = _backends.Where(b => b.Supports(renderJs)).ToList();
+        if (eligible.Count == 0)
+            throw new InvalidOperationException(
+                $"No content-fetch backend can serve {url} (renderJs={renderJs}).");
 
         Exception? lastError = null;
-        for (var i = 0; i < _backends.Count; i++)
+        for (var i = 0; i < eligible.Count; i++)
         {
-            var backend = _backends[i];
+            var backend = eligible[i];
             ct.ThrowIfCancellationRequested();
             try
             {
@@ -72,7 +76,7 @@ public sealed class CachingContentFetcher : IContentFetcher
                 lastError = ex;
                 _logger.LogWarning(ex,
                     "Fetch backend '{Backend}' failed for {Url}; {Remaining} backend(s) left to try",
-                    backend.Name, url, _backends.Count - i - 1);
+                    backend.Name, url, eligible.Count - i - 1);
             }
         }
 

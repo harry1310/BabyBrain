@@ -27,6 +27,11 @@ services:
     environment:
       BABYBRAIN_DB_PATH: /data/babybrain.db
       BABYBRAIN_HTML_ARCHIVE_PATH: /data/scrape-html
+    # Lets the container reach the laptop fetch service's reverse-SSH tunnel,
+    # which terminates on the VPS host (see docs/laptop-fetch.md). Harmless when
+    # the laptop feature isn't configured.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # NB: no `ports:` block — Caddy is the only public face.
     volumes:
       - ./data:/data

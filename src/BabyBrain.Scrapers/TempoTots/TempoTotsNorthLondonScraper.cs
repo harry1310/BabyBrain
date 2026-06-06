@@ -18,12 +18,11 @@ namespace BabyBrain.Scrapers.TempoTots;
 // the page and require the venue name to be present, so a site rewrite fails
 // loudly (→ a claude-fix issue) rather than silently emitting stale rows.
 //
-// Fetched through the shared content fetcher (home laptop first, ScraperAPI
-// fallback, with a persistent cache), not a plain HttpClient: Wix's edge serves
-// a 404 to the Hetzner VPS's datacenter IP (verified — the page returns 200
-// from a residential IP and the parser runs clean, but prod 404s every run). A
-// residential hop clears the block, the same reason the British Museum and
-// Southbank scrapers use it.
+// Fetched with a plain browser-UA HttpClient, with a few retries: the Wix edge
+// is flaky and intermittently 404s (it has erred for both the VPS and a
+// residential browser at times). ScraperAPI isn't worth a paid credit for one
+// recurring weekly class, so we just retry the fetch a handful of times and let
+// the source fail loudly (→ a claude-fix issue) if every attempt fails.
 //
 // Recurrence is implicit weekly on the named day; we materialise one row per
 // occurrence across the horizon, the same model as the Camden / Postal Museum
@@ -39,9 +38,14 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
     public string SourceId => "tempo_tots_north_london";
     public string Category => Categories.Class;
 
-    private readonly IContentFetcher _fetcher;
+    // Wix flakiness mitigation: retry the page fetch a few times with a short
+    // pause before giving up.
+    private const int FetchAttempts = 4;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
-    public TempoTotsNorthLondonScraper(IContentFetcher fetcher) => _fetcher = fetcher;
+    private readonly HttpClient _http;
+
+    public TempoTotsNorthLondonScraper(HttpClient http) => _http = http;
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
@@ -49,7 +53,7 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
         var horizonEnd = today.AddDays(horizonDays);
         var now = DateTimeOffset.UtcNow;
 
-        var html = await _fetcher.FetchAsync(SourceId, PageUrl, CacheTtl.Listing, ct: ct);
+        var html = await FetchPageWithRetriesAsync(ct);
         var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
 
         // One run-together string of the page's visible text. AngleSharp has
@@ -98,6 +102,29 @@ public sealed class TempoTotsNorthLondonScraper : IScraper
             });
         }
         return rows;
+    }
+
+    // Fetch the page, retrying on any HTTP failure (Wix intermittently 404s).
+    // GetStringAsync throws HttpRequestException on a non-success status.
+    private async Task<string> FetchPageWithRetriesAsync(CancellationToken ct)
+    {
+        Exception? last = null;
+        for (var attempt = 1; attempt <= FetchAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                return await _http.GetStringAsync(PageUrl, ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                last = ex;
+                if (attempt < FetchAttempts)
+                    await Task.Delay(RetryDelay, ct);
+            }
+        }
+        throw new InvalidOperationException(
+            $"Tempo Tots: page fetch failed after {FetchAttempts} attempts.", last);
     }
 
     // The class day is written as "Drop-in music Monday afternoons". Anchor on

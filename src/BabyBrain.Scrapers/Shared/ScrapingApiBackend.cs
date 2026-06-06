@@ -10,6 +10,9 @@ public sealed class ScrapingApiBackend : IBackendFetcher
 
     public string Name => "scraperapi";
 
+    // ScraperAPI handles both plain and JS-rendered fetches.
+    public bool Supports(bool renderJs) => true;
+
     public Task<string> FetchAsync(string url, bool renderJs, CancellationToken ct = default)
         => _api.FetchAsync(url, ct, renderJs);
 }
