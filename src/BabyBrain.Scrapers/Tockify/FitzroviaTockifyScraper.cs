@@ -1,24 +1,32 @@
-using System.Text.Json;
+using System.Net.Http.Json;
 using System.Text.Json.Serialization;
-using AngleSharp;
-using AngleSharp.Dom;
+using System.Text.RegularExpressions;
 using BabyBrain.Scrapers.Domain;
-using BabyBrain.Scrapers.Shared;
-using Microsoft.Playwright;
 
 namespace BabyBrain.Scrapers.Tockify;
 
-// Tockify embeds schema.org JSON-LD <script type="application/ld+json"> arrays
-// of Event objects in its rendered pages. We just deserialise.
-// This scraper targets the Fitzrovia Community Centre children's calendar;
-// other Tockify-powered orgs can be added by changing the URL.
+// Fitzrovia Community Centre runs its children's calendar on Tockify. We read
+// events from Tockify's public "ngevent" JSON API directly.
+//
+// We used to render the pinboard SPA with Playwright and scrape the schema.org
+// JSON-LD it embeds. That was fragile: Tockify attaches the JSON-LD <script>
+// early and *populates* it as the page hydrates, so a render that grabbed the
+// DOM mid-hydration captured only a partial event set — silently dropping
+// sessions (this is what made "Art Adventures" go missing). The JSON API has no
+// such race: it returns the full, structured result for a search server-side,
+// needs no browser, and can't be half-loaded.
+//
+// API shape (GET https://tockify.com/api/ngevent):
+//   calname=<calendar id from the URL path /whatsonatfcc/...>
+//   startms,endms = window in epoch ms; search=<term> filters server-side
+//   → { events: [ { eid:{uid,tid}, when:{start:{millis},end:{millis}},
+//                   content:{ summary:{text}, place, address } } ], metaData }
 public sealed class FitzroviaTockifyScraper : IScraper
 {
-    // Tockify renders ALL events into the page's schema.org JSON-LD regardless
-    // of client-side category filters. Only ?search=… filters server-side, so
-    // we fetch one URL per known baby/toddler session and merge. The full set
-    // of children-section search terms (from fitzroviacommunitycentre.org/children-families)
-    // also includes school-age clubs (Karma Kids 7-11, Whizz Kids/Challenge Lab/Sew
+    // Tockify filters server-side only on ?search=…, so we fetch one URL per
+    // known baby/toddler session and merge. The full set of children-section
+    // search terms (from fitzroviacommunitycentre.org/children-families) also
+    // includes school-age clubs (Karma Kids 7-11, Whizz Kids/Challenge Lab/Sew
     // Good/Fitz Foodies — all "After School Club"); those are deliberately omitted.
     private static readonly SessionConfig[] Sessions =
     [
@@ -27,7 +35,12 @@ public sealed class FitzroviaTockifyScraper : IScraper
         new("mini mozart",      MinAgeMonths: 0,  MaxAgeMonths: 60), // "Music sessions for under 5s"
         new("art adventures",   MinAgeMonths: 12, MaxAgeMonths: 60), // "for parents and toddlers"
     ];
-    private const string BaseUrl = "https://calendar.fitzroviacommunitycentre.org/whatsonatfcc/pinboard";
+
+    // Tockify calendar id (the first path segment of the FCC calendar URL,
+    // /whatsonatfcc/pinboard) and the permalink base for an event's detail page.
+    private const string Calname = "whatsonatfcc";
+    private const string ApiBase = "https://tockify.com/api/ngevent";
+    private const string DetailBase = "https://calendar.fitzroviacommunitycentre.org/whatsonatfcc/detail";
 
     // Some sessions on FCC's calendar are run by outside companies — FCC just
     // advertises them, with no price or booking link. For those we override the
@@ -44,11 +57,15 @@ public sealed class FitzroviaTockifyScraper : IScraper
             FromCost: 25m),
     ];
 
-    // Tockify emits startDate/endDate with the venue's offset (e.g. "+01:00" in BST).
-    // DateTimeOffset.LocalDateTime would resolve to the *machine's* local time —
-    // fine on a UK dev box but the production container runs UTC, so events came
-    // out an hour early during BST. Always pin to Europe/London explicitly.
+    // Tockify gives start/end as absolute epoch ms (UTC). We pin to Europe/London
+    // for the displayed date/time — DateTimeOffset.LocalDateTime would resolve to
+    // the *machine's* local time (fine on a UK dev box, but the production
+    // container runs UTC, so events came out an hour early during BST).
     private static readonly TimeZoneInfo London = TimeZoneInfo.FindSystemTimeZoneById("Europe/London");
+
+    private static readonly Regex PostcodeRegex = new(
+        @"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private record SessionConfig(string SearchTerm, int MinAgeMonths, int MaxAgeMonths);
 
@@ -61,108 +78,144 @@ public sealed class FitzroviaTockifyScraper : IScraper
     public string SourceId => "tockify_fitzrovia";
     public string Category => Categories.Community;
 
-    private readonly PlaywrightFetcher _fetcher;
-    public FitzroviaTockifyScraper(PlaywrightFetcher fetcher) => _fetcher = fetcher;
+    private readonly HttpClient _http;
+    public FitzroviaTockifyScraper(HttpClient http) => _http = http;
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
         var horizonEnd = DateOnly.FromDateTime(DateTime.UtcNow.Date).AddDays(horizonDays);
+        var startMs = now.ToUnixTimeMilliseconds();
+        var endMs = now.AddDays(horizonDays + 1).ToUnixTimeMilliseconds();
         var rows = new Dictionary<string, EventOccurrence>(); // dedupe by ExternalKey
-        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
         foreach (var session in Sessions)
         {
-            var url = $"{BaseUrl}?search={Uri.EscapeDataString(session.SearchTerm)}";
-            var html = await _fetcher.FetchRenderedHtmlAsync(url, "script[type='application/ld+json']", WaitForSelectorState.Attached, ct);
-            var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
-            foreach (var ev in ExtractEvents(doc, opts, horizonEnd, now, session))
+            var url = $"{ApiBase}?calname={Calname}&max=500&startms={startMs}&endms={endMs}" +
+                      $"&search={Uri.EscapeDataString(session.SearchTerm)}";
+            var response = await _http.GetFromJsonAsync<TockifyResponse>(url, ct);
+            foreach (var ev in ExtractEvents(response, horizonEnd, now, session))
                 rows[ev.ExternalKey] = ev;
         }
         return rows.Values.ToList();
     }
 
-    private IEnumerable<EventOccurrence> ExtractEvents(IDocument doc, JsonSerializerOptions opts, DateOnly horizonEnd, DateTimeOffset now, SessionConfig session)
+    private IEnumerable<EventOccurrence> ExtractEvents(
+        TockifyResponse? response, DateOnly horizonEnd, DateTimeOffset now, SessionConfig session)
     {
-        foreach (var script in doc.QuerySelectorAll("script[type='application/ld+json']"))
+        foreach (var ev in response?.Events ?? [])
         {
-            var raw = script.TextContent.Trim();
-            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var startMs = ev.When?.Start?.Millis;
+            if (startMs is null) continue;
 
-            JsonDocument parsed;
-            try { parsed = JsonDocument.Parse(raw); }
-            catch (JsonException) { continue; }
+            var startUtc = DateTimeOffset.FromUnixTimeMilliseconds(startMs.Value);
+            var localStart = TimeZoneInfo.ConvertTime(startUtc, London).DateTime;
+            var date = DateOnly.FromDateTime(localStart);
+            if (date > horizonEnd) continue;
 
-            var items = parsed.RootElement.ValueKind == JsonValueKind.Array
-                ? parsed.RootElement.EnumerateArray()
-                : new[] { parsed.RootElement }.AsEnumerable();
+            var name = ev.Content?.Summary?.Text ?? "Event";
+            var op = Operators.FirstOrDefault(
+                o => name.Contains(o.NameMatch, StringComparison.OrdinalIgnoreCase));
 
-            foreach (var item in items)
+            // Tockify's own detail permalink: /detail/{eventId}/{occurrenceMs}.
+            // Built to byte-match the URL the old JSON-LD path emitted, so the
+            // ExternalKey identity is unchanged across this migration.
+            var uid = ev.Eid?.Uid;
+            var detailUrl = uid is null ? null : $"{DetailBase}/{uid}/{startMs.Value}";
+
+            var endMs = ev.When?.End?.Millis;
+            var (address, postcode) = ParseAddress(ev.Content?.Address);
+
+            yield return new EventOccurrence
             {
-                if (!item.TryGetProperty("@type", out var typeProp) || typeProp.GetString() != "Event")
-                    continue;
-                var ev = item.Deserialize<TockifyEvent>(opts);
-                if (ev is null || ev.StartDate == default) continue;
-
-                var localStart = TimeZoneInfo.ConvertTime(ev.StartDate, London).DateTime;
-                var date = DateOnly.FromDateTime(localStart);
-                if (date > horizonEnd) continue;
-
-                var name = ev.Name ?? "Event";
-                var op = Operators.FirstOrDefault(
-                    o => name.Contains(o.NameMatch, StringComparison.OrdinalIgnoreCase));
-                yield return new EventOccurrence
-                {
-                    // Tockify URLs end in ".../detail/{eventId}/{occurrenceMs}" — stable across runs.
-                    // ExternalKey stays keyed on the FCC URL even for operator
-                    // events, so the identity is unchanged; only the displayed
-                    // SourceUrl below swaps to the operator's booking page.
-                    ExternalKey = $"{SourceId}:{ev.Url ?? $"{ev.Name}:{ev.StartDate.ToUnixTimeMilliseconds()}"}",
-                    Source = SourceId,
-                    Category = Category,
-                    SourceUrl = op?.BookingUrl ?? ev.Url,
-                    Date = date,
-                    StartTime = TimeOnly.FromDateTime(localStart),
-                    EndTime = ev.EndDate == default ? null : TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(ev.EndDate, London).DateTime),
-                    SessionName = name,
-                    SessionNotes = null,
-                    VenueName = ev.Location?.Name ?? "Fitzrovia Community Centre",
-                    VenueAddress = ev.Location?.Address is { } a
-                        ? string.Join(", ", new[] { a.StreetAddress, a.Locality }.Where(s => !string.IsNullOrWhiteSpace(s)))
-                        : null,
-                    Postcode = ev.Location?.Address?.PostalCode,
-                    MinAgeMonths = session.MinAgeMonths,
-                    MaxAgeMonths = session.MaxAgeMonths,
-                    TermTimeOnly = false,
-                    // FCC's own sessions are free; an operator-run event is not —
-                    // show the operator's "from" price instead.
-                    IsFree = op is null,
-                    Cost = op?.FromCost,
-                    LastSeenAt = now,
-                };
-            }
+                ExternalKey = $"{SourceId}:{detailUrl ?? $"{name}:{startMs.Value}"}",
+                Source = SourceId,
+                Category = Category,
+                // FCC's own sessions link to their detail page; an operator-run
+                // event links to the operator's booking page instead.
+                SourceUrl = op?.BookingUrl ?? detailUrl,
+                Date = date,
+                StartTime = TimeOnly.FromDateTime(localStart),
+                EndTime = endMs is null
+                    ? null
+                    : TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(
+                        DateTimeOffset.FromUnixTimeMilliseconds(endMs.Value), London).DateTime),
+                SessionName = name,
+                SessionNotes = null,
+                VenueName = string.IsNullOrWhiteSpace(ev.Content?.Place)
+                    ? "Fitzrovia Community Centre"
+                    : ev.Content!.Place,
+                VenueAddress = address,
+                Postcode = postcode,
+                MinAgeMonths = session.MinAgeMonths,
+                MaxAgeMonths = session.MaxAgeMonths,
+                TermTimeOnly = false,
+                // FCC's own sessions are free; an operator-run event is not —
+                // show the operator's "from" price instead.
+                IsFree = op is null,
+                Cost = op?.FromCost,
+                LastSeenAt = now,
+            };
         }
+    }
+
+    // Tockify gives the location as one flat string, e.g.
+    // "2 Foley St, London W1W 6DL, UK". Split out the postcode and drop the
+    // trailing country so VenueAddress reads like the rest of the corpus.
+    private static (string? address, string? postcode) ParseAddress(string? full)
+    {
+        if (string.IsNullOrWhiteSpace(full)) return (null, null);
+
+        var pc = PostcodeRegex.Match(full);
+        var postcode = pc.Success ? pc.Value.ToUpperInvariant() : null;
+
+        var addr = pc.Success ? full.Remove(pc.Index, pc.Length) : full;
+        addr = Regex.Replace(addr, @",?\s*(UK|United Kingdom)\s*$", "", RegexOptions.IgnoreCase);
+        addr = Regex.Replace(addr, @"\s+", " ");
+        addr = Regex.Replace(addr, @"\s*,(\s*,)+", ",");      // collapse empty ", ," runs
+        addr = addr.Trim().Trim(',').Trim();
+
+        return (string.IsNullOrWhiteSpace(addr) ? null : addr, postcode);
+    }
+
+    private sealed class TockifyResponse
+    {
+        [JsonPropertyName("events")] public List<TockifyEvent>? Events { get; set; }
     }
 
     private sealed class TockifyEvent
     {
-        [JsonPropertyName("name")] public string? Name { get; set; }
-        [JsonPropertyName("url")] public string? Url { get; set; }
-        [JsonPropertyName("startDate")] public DateTimeOffset StartDate { get; set; }
-        [JsonPropertyName("endDate")] public DateTimeOffset EndDate { get; set; }
-        [JsonPropertyName("location")] public TockifyPlace? Location { get; set; }
+        [JsonPropertyName("eid")] public TockifyEid? Eid { get; set; }
+        [JsonPropertyName("when")] public TockifyWhen? When { get; set; }
+        [JsonPropertyName("content")] public TockifyContent? Content { get; set; }
     }
 
-    private sealed class TockifyPlace
+    private sealed class TockifyEid
     {
-        [JsonPropertyName("name")] public string? Name { get; set; }
-        [JsonPropertyName("address")] public TockifyAddress? Address { get; set; }
+        [JsonPropertyName("uid")] public string? Uid { get; set; }
+        [JsonPropertyName("tid")] public long Tid { get; set; }
     }
 
-    private sealed class TockifyAddress
+    private sealed class TockifyWhen
     {
-        [JsonPropertyName("streetAddress")] public string? StreetAddress { get; set; }
-        [JsonPropertyName("addressLocality")] public string? Locality { get; set; }
-        [JsonPropertyName("postalCode")] public string? PostalCode { get; set; }
+        [JsonPropertyName("start")] public TockifyInstant? Start { get; set; }
+        [JsonPropertyName("end")] public TockifyInstant? End { get; set; }
+    }
+
+    private sealed class TockifyInstant
+    {
+        [JsonPropertyName("millis")] public long? Millis { get; set; }
+    }
+
+    private sealed class TockifyContent
+    {
+        [JsonPropertyName("summary")] public TockifyText? Summary { get; set; }
+        [JsonPropertyName("place")] public string? Place { get; set; }
+        [JsonPropertyName("address")] public string? Address { get; set; }
+    }
+
+    private sealed class TockifyText
+    {
+        [JsonPropertyName("text")] public string? Text { get; set; }
     }
 }

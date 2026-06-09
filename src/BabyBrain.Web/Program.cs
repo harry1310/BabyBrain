@@ -213,7 +213,16 @@ builder.Services.AddSingleton(sp => new ScrapingApiFetcher(
     scraperApiKey!,
     sp.GetRequiredService<ILogger<ScrapingApiFetcher>>()));
 builder.Services.AddScoped<IScraper, CamdenStayAndPlayScraper>();
-builder.Services.AddScoped<IScraper, FitzroviaTockifyScraper>();
+// Fitzrovia Community Centre: reads Tockify's public ngevent JSON API directly
+// (no SPA render — see the scraper header). Plain HTTP with a browser-shaped UA.
+builder.Services.AddHttpClient<FitzroviaTockifyScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<FitzroviaTockifyScraper>());
 builder.Services.AddScoped<IScraper, IslingtonFindYourScraper>();
 builder.Services.AddScoped<IScraper, BritishMuseumScraper>();
 builder.Services.AddScoped<IScraper, SouthbankCentreScraper>();
