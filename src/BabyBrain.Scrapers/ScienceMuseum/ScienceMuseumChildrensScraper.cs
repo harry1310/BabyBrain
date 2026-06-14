@@ -558,14 +558,39 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         return Truncate(string.Join(" ", parts), 400);
     }
 
+    // The 03:00 scrape slot runs all sources at once and the Science Museum site
+    // is intermittently slow/blocking under that load — a single failed fetch of
+    // the listing's page 0 used to zero out the whole run (0 slugs → 0 rows →
+    // FAILED), even though a later rerun succeeds. Retry transient failures with a
+    // short backoff so one blip no longer sinks the scrape.
     private async Task<string?> TryFetchAsync(string url, CancellationToken ct)
     {
-        try { return await _http.GetStringAsync(url, ct); }
-        catch (Exception ex)
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            _logger.LogWarning(ex, "Science Museum: fetch of {Url} failed", url);
-            return null;
+            try { return await _http.GetStringAsync(url, ct); }
+            catch (Exception ex)
+            {
+                // A genuine caller cancellation (shutdown) must propagate, not be
+                // swallowed as a fetch failure. An HttpClient *timeout* also throws
+                // a (Task)OperationCanceledException but leaves ct un-cancelled —
+                // that one we want to retry.
+                ct.ThrowIfCancellationRequested();
+
+                if (attempt < maxAttempts)
+                {
+                    _logger.LogWarning(ex,
+                        "Science Museum: fetch of {Url} failed (attempt {Attempt}/{Max}); retrying",
+                        url, attempt, maxAttempts);
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct);
+                    continue;
+                }
+
+                _logger.LogWarning(ex, "Science Museum: fetch of {Url} failed after {Max} attempts", url, maxAttempts);
+                return null;
+            }
         }
+        return null; // unreachable — the loop either returns or throws
     }
 
     private static string Collapse(string s) =>
