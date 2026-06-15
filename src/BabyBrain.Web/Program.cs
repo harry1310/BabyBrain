@@ -269,8 +269,11 @@ builder.Services.AddHttpClient<DesignMuseumFamiliesScraper>(c =>
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<DesignMuseumFamiliesScraper>());
 
 // Science Museum see-and-do, filtered to baby/toddler-suitable items. The
-// site's Varnish/Cloudflare edge 405s a stock Chrome UA but serves a desktop
-// Safari UA fine (verified returning 200), so this client poses as Safari.
+// see-and-do pages now sit behind Cloudflare, which 403s the VPS IP regardless
+// of UA (mid-June 2026) — those fetches go through IContentFetcher (laptop →
+// ScraperAPI) inside the scraper. This HttpClient only carries the Tessitura
+// booking POST to my.sciencemuseum.org.uk (un-blocked); the Safari UA is kept
+// as that feed was probed with it.
 builder.Services.AddHttpClient<ScienceMuseumChildrensScraper>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(30);
