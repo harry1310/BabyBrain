@@ -60,7 +60,7 @@ public sealed class CachingContentFetcher : IContentFetcher
             try
             {
                 var html = await backend.FetchAsync(url, renderJs, ct);
-                await _cache.SetAsync(source, url, renderJs, html, backend.Name, ct);
+                await _cache.SetAsync(source, url, renderJs, html, backend.Name, ttl, ct);
                 return html;
             }
             catch (ScraperApiCreditsExhaustedException)

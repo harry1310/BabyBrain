@@ -9,7 +9,7 @@ public sealed class NullFetchCache : IFetchCache
     public Task<string?> GetAsync(string url, bool renderJs, TimeSpan ttl, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
 
-    public Task SetAsync(string source, string url, bool renderJs, string html, string backend, CancellationToken ct = default)
+    public Task SetAsync(string source, string url, bool renderJs, string html, string backend, TimeSpan ttl, CancellationToken ct = default)
         => Task.CompletedTask;
 
     public Task<int> ClearAsync(string source, CancellationToken ct = default) => Task.FromResult(0);

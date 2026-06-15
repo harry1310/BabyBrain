@@ -10,8 +10,10 @@ public interface IFetchCache
     Task<string?> GetAsync(string url, bool renderJs, TimeSpan ttl, CancellationToken ct = default);
 
     // Upsert the fetched HTML for (url, renderJs). source labels it for admin
-    // grouping/clearing; backend records which fetcher produced it.
-    Task SetAsync(string source, string url, bool renderJs, string html, string backend, CancellationToken ct = default);
+    // grouping/clearing; backend records which fetcher produced it; ttl is the
+    // freshness window it was fetched under, stored so the admin panel can show
+    // when the entry expires.
+    Task SetAsync(string source, string url, bool renderJs, string html, string backend, TimeSpan ttl, CancellationToken ct = default);
 
     // Admin: drop all cached fetches for a source so the next run refetches
     // live. Returns the number of entries removed.
@@ -21,4 +23,18 @@ public interface IFetchCache
     Task<IReadOnlyList<FetchCacheStat>> GetStatsAsync(CancellationToken ct = default);
 }
 
-public sealed record FetchCacheStat(string Source, int Entries, DateTimeOffset? OldestFetchedAt, DateTimeOffset? NewestFetchedAt);
+public sealed record FetchCacheStat(
+    string Source,
+    int Entries,
+    DateTimeOffset? OldestFetchedAt,
+    DateTimeOffset? NewestFetchedAt,
+    IReadOnlyList<FetchCacheKindStat> Kinds);
+
+// Per-kind ("listing" / "detail" / "unknown") breakdown within a source. NextExpiry
+// is the soonest an entry of this kind goes cold (the one that will trigger the next
+// live refetch); LastExpiry is the furthest out. Null when the TTL is unknown.
+public sealed record FetchCacheKindStat(
+    string Kind,
+    int Entries,
+    DateTimeOffset? NextExpiry,
+    DateTimeOffset? LastExpiry);

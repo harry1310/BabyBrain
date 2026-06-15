@@ -21,4 +21,11 @@ public class FetchCacheEntry
     public required string Backend { get; set; }
 
     public DateTimeOffset FetchedAt { get; set; }
+
+    // The TTL this page was fetched under, in seconds, so the admin cache panel
+    // can show when each entry goes cold (FetchedAt + Ttl). Listings use the
+    // shorter CacheTtl.Listing, detail pages the longer CacheTtl.Detail; the
+    // panel also uses it to label entries listing vs detail. 0 = legacy row
+    // written before this column existed (treated as unknown).
+    public long TtlSeconds { get; set; }
 }

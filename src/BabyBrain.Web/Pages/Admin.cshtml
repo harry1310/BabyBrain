@@ -468,30 +468,52 @@ else
         return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; });
     }
 
-    // Fetch-cache panel: list cached-page counts + oldest age per source, each
-    // with a Clear button.
+    // Fetch-cache panel: per source, split listing vs detail with page counts and
+    // when each kind next goes cold (so you can spot a source about to refetch live
+    // — keep the laptop up before then to avoid ScraperAPI credits). Clear per source.
     function renderCachePanel() {
         var panel = document.getElementById('bb-cache-panel');
         if (!panel) return;
+        var now = Date.now();
+        function fmtExpiry(iso) {
+            if (!iso) return { txt: 'unknown', cls: 'text-muted' };
+            var diff = new Date(iso).getTime() - now;
+            var past = diff < 0;
+            var h = Math.floor(Math.abs(diff) / 3600000), d = Math.floor(h / 24);
+            h = h % 24;
+            var span = d > 0 ? (d + 'd ' + h + 'h') : (h + 'h');
+            if (past) return { txt: 'cold (' + span + ' ago)', cls: 'text-danger fw-semibold' };
+            return { txt: 'in ' + span, cls: (d < 1 ? 'fw-semibold' : '') };
+        }
         fetch('/Admin/api/cache-status')
             .then(parseJson)
             .then(function (stats) {
                 if (!stats || stats.length === 0) { panel.textContent = 'Cache is empty.'; return; }
-                var now = Date.now();
-                var rows = stats.map(function (s) {
-                    var oldest = s.oldestFetchedAt ? new Date(s.oldestFetchedAt) : null;
-                    var ageTxt = oldest ? (Math.round((now - oldest.getTime()) / 3600000) + 'h ago') : '—';
-                    return '<tr>' +
-                        '<td class="font-monospace small">' + s.source + '</td>' +
-                        '<td class="text-end">' + s.entries + '</td>' +
-                        '<td class="text-end">' + ageTxt + '</td>' +
-                        '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-secondary bb-clear-cache-btn" data-source="' + s.source + '">Clear</button></td>' +
-                        '</tr>';
-                }).join('');
+                var body = '';
+                stats.forEach(function (s) {
+                    var kinds = (s.kinds && s.kinds.length) ? s.kinds
+                        : [{ kind: 'unknown', entries: s.entries, nextExpiry: null, lastExpiry: null }];
+                    kinds.forEach(function (k, i) {
+                        var exp = fmtExpiry(k.nextExpiry);
+                        var title = (k.lastExpiry && k.lastExpiry !== k.nextExpiry)
+                            ? ' title="last ' + k.kind + ' page expires ' + new Date(k.lastExpiry).toLocaleString() + '"'
+                            : '';
+                        body += '<tr>';
+                        if (i === 0)
+                            body += '<td class="font-monospace small" rowspan="' + kinds.length + '">' + s.source + '</td>';
+                        body += '<td>' + k.kind + '</td>' +
+                                '<td class="text-end">' + k.entries + '</td>' +
+                                '<td class="text-end ' + exp.cls + '"' + title + '>' + exp.txt + '</td>';
+                        if (i === 0)
+                            body += '<td class="text-end" rowspan="' + kinds.length + '">' +
+                                    '<button type="button" class="btn btn-sm btn-outline-secondary bb-clear-cache-btn" data-source="' + s.source + '">Clear</button></td>';
+                        body += '</tr>';
+                    });
+                });
                 panel.innerHTML =
-                    '<table class="table table-sm align-middle" style="max-width:560px">' +
-                    '<thead><tr><th>Source</th><th class="text-end">Cached pages</th><th class="text-end">Oldest</th><th></th></tr></thead>' +
-                    '<tbody>' + rows + '</tbody></table>';
+                    '<table class="table table-sm align-middle" style="max-width:640px">' +
+                    '<thead><tr><th>Source</th><th>Type</th><th class="text-end">Pages</th><th class="text-end">Next expiry</th><th></th></tr></thead>' +
+                    '<tbody>' + body + '</tbody></table>';
             })
             .catch(function () { panel.textContent = 'Could not load cache status.'; });
     }
