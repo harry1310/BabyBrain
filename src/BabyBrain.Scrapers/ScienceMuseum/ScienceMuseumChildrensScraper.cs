@@ -89,11 +89,19 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
     public string SourceId => "science_museum_childrens";
     public string Category => Categories.Museum;
 
+    // see-and-do pages sit behind Cloudflare, which now 403s the VPS datacenter
+    // IP regardless of UA (worked over plain HTTP until mid-June 2026). Those GETs
+    // go through the shared fetcher (laptop Chrome → ScraperAPI, + cache) like the
+    // British Museum / Southbank scrapers. The Tessitura booking feed lives on a
+    // different, un-blocked host (my.sciencemuseum.org.uk) so it stays on _http.
+    private readonly IContentFetcher _fetcher;
     private readonly HttpClient _http;
     private readonly ILogger<ScienceMuseumChildrensScraper> _logger;
 
-    public ScienceMuseumChildrensScraper(HttpClient http, ILogger<ScienceMuseumChildrensScraper> logger)
+    public ScienceMuseumChildrensScraper(
+        IContentFetcher fetcher, HttpClient http, ILogger<ScienceMuseumChildrensScraper> logger)
     {
+        _fetcher = fetcher;
         _http = http;
         _logger = logger;
     }
@@ -112,7 +120,7 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         {
             ct.ThrowIfCancellationRequested();
             var url = $"{Origin}{ListingPath}/{slug}";
-            var html = await TryFetchAsync(url, ct);
+            var html = await TryFetchAsync(url, CacheTtl.Detail, ct);
             if (html is null) continue;
 
             var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
@@ -137,7 +145,7 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         for (var page = 0; page < MaxPages; page++)
         {
             ct.ThrowIfCancellationRequested();
-            var html = await TryFetchAsync($"{Origin}{ListingPath}?page={page}", ct);
+            var html = await TryFetchAsync($"{Origin}{ListingPath}?page={page}", CacheTtl.Listing, ct);
             if (html is null) break;
 
             var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
@@ -558,39 +566,20 @@ public sealed class ScienceMuseumChildrensScraper : IScraper
         return Truncate(string.Join(" ", parts), 400);
     }
 
-    // The 03:00 scrape slot runs all sources at once and the Science Museum site
-    // is intermittently slow/blocking under that load — a single failed fetch of
-    // the listing's page 0 used to zero out the whole run (0 slugs → 0 rows →
-    // FAILED), even though a later rerun succeeds. Retry transient failures with a
-    // short backoff so one blip no longer sinks the scrape.
-    private async Task<string?> TryFetchAsync(string url, CancellationToken ct)
+    // Fetch a see-and-do page through the shared fetcher (laptop Chrome →
+    // ScraperAPI, cached for `ttl`). Credits-exhausted propagates so the runner
+    // reports the source as blocked rather than a silent zero; any other failure
+    // returns null and the caller skips/stops.
+    private async Task<string?> TryFetchAsync(string url, TimeSpan ttl, CancellationToken ct)
     {
-        const int maxAttempts = 3;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        try { return await _fetcher.FetchAsync(SourceId, url, ttl, ct: ct); }
+        catch (ScraperApiCreditsExhaustedException) { throw; }
+        catch (Exception ex)
         {
-            try { return await _http.GetStringAsync(url, ct); }
-            catch (Exception ex)
-            {
-                // A genuine caller cancellation (shutdown) must propagate, not be
-                // swallowed as a fetch failure. An HttpClient *timeout* also throws
-                // a (Task)OperationCanceledException but leaves ct un-cancelled —
-                // that one we want to retry.
-                ct.ThrowIfCancellationRequested();
-
-                if (attempt < maxAttempts)
-                {
-                    _logger.LogWarning(ex,
-                        "Science Museum: fetch of {Url} failed (attempt {Attempt}/{Max}); retrying",
-                        url, attempt, maxAttempts);
-                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct);
-                    continue;
-                }
-
-                _logger.LogWarning(ex, "Science Museum: fetch of {Url} failed after {Max} attempts", url, maxAttempts);
-                return null;
-            }
+            ct.ThrowIfCancellationRequested();
+            _logger.LogWarning(ex, "Science Museum: fetch of {Url} failed", url);
+            return null;
         }
-        return null; // unreachable — the loop either returns or throws
     }
 
     private static string Collapse(string s) =>
