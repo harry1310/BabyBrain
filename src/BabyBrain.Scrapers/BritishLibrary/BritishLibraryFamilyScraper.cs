@@ -103,7 +103,61 @@ public sealed class BritishLibraryFamilyScraper : IScraper
             }
         }
 
+        AddFairyTalesExhibition(rows, today, horizonEnd, now, seen);
+
         return rows;
+    }
+
+    // Special-case sub-source: the "Fairy Tales" exhibition
+    // (events.bl.uk/exhibitions/fairy-tales). Unlike the /events/ sessions this
+    // scraper reads from JSON-LD, an exhibition is a date-RANGE drop-in: it isn't
+    // on the family-events listing, lives under /exhibitions/, and carries no
+    // schema.org Event blocks — so the normal path can't see it. It's hand-modelled
+    // here as one drop-in row per day across its run, clamped to the scrape horizon.
+    // Hardcoded on purpose (fixed-run exhibition, stable facts); it stops emitting
+    // rows by itself once past FairyTalesEnd. Remove this once it has closed.
+    private const string FairyTalesUrl = "https://events.bl.uk/exhibitions/fairy-tales";
+    private static readonly DateOnly FairyTalesStart = new(2026, 3, 27);
+    private static readonly DateOnly FairyTalesEnd = new(2026, 8, 23);
+
+    private void AddFairyTalesExhibition(
+        List<EventOccurrence> rows, DateOnly today, DateOnly horizonEnd, DateTimeOffset now, HashSet<string> seen)
+    {
+        var from = today > FairyTalesStart ? today : FairyTalesStart;
+        var to = horizonEnd < FairyTalesEnd ? horizonEnd : FairyTalesEnd;
+
+        for (var d = from; d <= to; d = d.AddDays(1))
+        {
+            // 10:00 is a placeholder opening time, hence TimeApproximate — an
+            // exhibition is a drop-in, not a timed session.
+            var key = $"{SourceId}:fairy-tales:{d:yyyy-MM-dd}:1000";
+            if (!seen.Add(key)) continue;
+
+            rows.Add(new EventOccurrence
+            {
+                ExternalKey = key,
+                Source = SourceId,
+                Category = Category,
+                SourceUrl = FairyTalesUrl,
+                Date = d,
+                StartTime = new TimeOnly(10, 0),
+                EndTime = null,
+                TimeApproximate = true,
+                SessionName = "Fairy Tales (exhibition)",
+                SessionNotes = "Drop-in family exhibition — visit any time during Library opening hours. "
+                    + "An interactive journey through enchanted lands, magical creatures and classic tales. "
+                    + "Aimed at ages 3–10; under 1s go free. Tickets £11.50 off-peak / £13.50 peak, concessions available.",
+                VenueName = "British Library",
+                VenueAddress = "96 Euston Road, London",
+                Postcode = "NW1 2DB",
+                MinAgeMonths = 36,
+                MaxAgeMonths = 120,
+                TermTimeOnly = false,
+                IsFree = false,
+                Cost = 11.50m,
+                LastSeenAt = now,
+            });
+        }
     }
 
     private record Card(string Url, string PriceLabel);
