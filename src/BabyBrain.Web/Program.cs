@@ -11,6 +11,7 @@ using BabyBrain.Scrapers.Holborn;
 using BabyBrain.Scrapers.Islington;
 using BabyBrain.Scrapers.Lso;
 using BabyBrain.Scrapers.Ltm;
+using BabyBrain.Scrapers.LittleBoo;
 using BabyBrain.Scrapers.MomeLondon;
 using BabyBrain.Scrapers.MwHealth;
 using BabyBrain.Scrapers.PostalMuseum;
@@ -296,6 +297,18 @@ builder.Services.AddHttpClient<TempoTotsNorthLondonScraper>(c =>
     c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
 });
 builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<TempoTotsNorthLondonScraper>());
+
+// Little Boo Stories: two weekly storytelling classes every Monday at Christ
+// Church Highbury, on a flaky Wix page. Same plain browser-UA + in-scraper
+// retries as Tempo Tots.
+builder.Services.AddHttpClient<LittleBooStoriesHighburyScraper>(c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-GB,en;q=0.9");
+});
+builder.Services.AddScoped<IScraper>(sp => sp.GetRequiredService<LittleBooStoriesHighburyScraper>());
 
 // The Together Project "Songs & Smiles": free intergenerational singing
 // sessions on a Squarespace page, fine over plain HTTP. Currently scoped to the

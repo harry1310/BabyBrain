@@ -22,6 +22,7 @@ public static class Sources
         "design_museum_families"         => "Design Museum",
         "holborn_early_years"            => "Holborn Community Association",
         "islington_findyour"             => "Islington Libraries",
+        "little_boo_stories_highbury"    => "Little Boo Stories",
         "lso_under_5s_concerts"          => "LSO St Luke's",
         "ltm_singing_and_story_sessions" => "London Transport Museum",
         "mome_london_creative_classes"   => "Mome London",
