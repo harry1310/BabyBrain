@@ -9,20 +9,29 @@ namespace BabyBrain.Scrapers.Camden;
 // Format: <h2>Day</h2> ... <h3>Session name (- age suffix)</h3> followed by one
 // or more <p> lines, each shaped "start to end [(notes)], venue, address, postcode".
 // Recurrence is implicit weekly; we materialise occurrences across the horizon.
+//
+// The timetable is in the server-rendered HTML (no JS needed), but the site sits
+// behind Cloudflare, which now 403s the VPS datacenter IP with a "Just a moment…"
+// challenge (mid-June 2026) — so the old prod-Playwright fetch timed out waiting
+// for a selector that never appeared. Fetch through IContentFetcher instead (the
+// laptop Chrome → ScraperAPI backend, + cache) like the British Museum / Southbank
+// scrapers; one page fetch yields the whole timetable.
 public sealed class CamdenStayAndPlayScraper : IScraper
 {
     private const string Url = "https://families.camden.gov.uk/full-stay-play-timetable/";
     public string SourceId => "camden_stay_and_play";
     public string Category => Categories.Community;
 
-    private readonly PlaywrightFetcher _fetcher;
+    private readonly IContentFetcher _fetcher;
 
-    public CamdenStayAndPlayScraper(PlaywrightFetcher fetcher) => _fetcher = fetcher;
+    public CamdenStayAndPlayScraper(IContentFetcher fetcher) => _fetcher = fetcher;
 
     public async Task<IReadOnlyList<EventOccurrence>> ScrapeAsync(int horizonDays, CancellationToken ct = default)
     {
-        var html = await _fetcher.FetchRenderedHtmlAsync(Url, ".lbcamden-prose h2", ct: ct);
+        var html = await _fetcher.FetchAsync(SourceId, Url, CacheTtl.Listing, renderJs: false, ct: ct);
         var doc = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(html), ct);
+        // Doubles as the liveness guard: a Cloudflare challenge or restructured
+        // page won't contain the prose container, so we fail loudly.
         var prose = doc.QuerySelector(".lbcamden-prose")
             ?? throw new InvalidOperationException("Camden: .lbcamden-prose not found");
 
