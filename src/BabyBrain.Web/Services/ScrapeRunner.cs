@@ -142,6 +142,31 @@ public sealed class ScrapeRunner
 
             return new ScraperOutcome(scraper.SourceId, false, 0, detail, completedAt);
         }
+        catch (SourceEmptyException ex)
+        {
+            // The scraper reached its source and parsed it cleanly, but it
+            // genuinely has no events matching our criteria right now (not a
+            // defect). Record a 0-row *success* so any open claude-fix issue
+            // auto-closes via the recovery path, and deliberately skip the
+            // upsert: with no rows there is nothing to write, and upserting an
+            // empty set would prune every existing row for this source.
+            var completedAt = DateTimeOffset.UtcNow;
+            _logger.LogInformation(
+                "Scraper {Source} reached source but is legitimately empty: {Detail}",
+                scraper.SourceId, ex.Message);
+
+            await TryRecordRunAsync(new ScrapeRun
+            {
+                Source = scraper.SourceId,
+                StartedAt = startedAt,
+                CompletedAt = completedAt,
+                Status = ScrapeRun.StatusSuccess,
+                RowsScraped = 0,
+            }, ct);
+
+            await NotifyAlertSinkAsync(scraper.SourceId, success: true, error: null, ct);
+            return new ScraperOutcome(scraper.SourceId, true, 0, null, completedAt);
+        }
         catch (Exception ex)
         {
             var completedAt = DateTimeOffset.UtcNow;

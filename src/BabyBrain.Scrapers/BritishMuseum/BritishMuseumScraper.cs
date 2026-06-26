@@ -85,6 +85,12 @@ public sealed class BritishMuseumScraper : IScraper
         var teasers = ExtractTeasers(hub).ToList();
         diag.Append($"hub {hubHtml.Length} chars, {teasers.Count} teaser(s). ");
 
+        // Tracks whether any teaser looked *broken* (a failed detail fetch or a
+        // page we couldn't parse) as opposed to merely empty for a legitimate
+        // reason (age-filtered, or all dates beyond the horizon). This decides
+        // whether a final 0-row outcome is a failure or a genuine empty source.
+        var anyStructural = false;
+
         foreach (var teaser in teasers)
         {
             ct.ThrowIfCancellationRequested();
@@ -95,8 +101,9 @@ public sealed class BritishMuseumScraper : IScraper
                 var detailHtml = await _fetcher.FetchAsync(SourceId, teaser.Url, CacheTtl.Detail, renderJs: true, ct: ct);
                 sw.Stop();
                 var detail = await BrowsingContext.New(Configuration.Default).OpenAsync(req => req.Content(detailHtml), ct);
-                var (teaserRows, note) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
+                var (teaserRows, note, outcome) = BuildOccurrences(detail, teaser, today, horizonEnd, now);
                 rows.AddRange(teaserRows);
+                if (outcome == TeaserOutcome.Structural) anyStructural = true;
                 diag.Append($"[{teaser.Title}] OK in {sw.ElapsedMilliseconds}ms " +
                             $"({detailHtml.Length} chars): {note}. ");
             }
@@ -104,6 +111,7 @@ public sealed class BritishMuseumScraper : IScraper
             catch (ScraperApiCreditsExhaustedException) { throw; } // billing state — blocks the whole run
             catch (Exception ex)
             {
+                anyStructural = true; // a detail fetch that failed is a real fault, not a benign empty
                 diag.Append($"[{teaser.Title}] FETCH FAILED: " +
                             $"{ex.GetType().Name}: {ex.Message}. ");
             }
@@ -111,17 +119,33 @@ public sealed class BritishMuseumScraper : IScraper
 
         var summary = $"British Museum scrape: {rows.Count} row(s). {diag}".TrimEnd();
 
-        // 0 rows is treated as a failure by the orchestrator anyway; throw with
-        // the full breakdown so the *reason* reaches the GitHub issue, not just
-        // a bare "returned 0 events".
-        if (rows.Count == 0)
+        if (rows.Count > 0)
+        {
+            _logger.LogInformation("{Summary}", summary);
+            return rows;
+        }
+
+        // 0 rows. Distinguish a genuine empty source — reached and parsed fine,
+        // but every event is school-age or beyond the horizon — from a
+        // malfunction (no teasers found at all, a detail fetch failed, or a page
+        // format we couldn't parse). Both throw with the full breakdown so the
+        // *reason* is preserved, but only the malfunction is a scrape failure;
+        // the genuine empty is recorded as a 0-row success by the runner. The BM
+        // family hub regularly carries only school-age events (issue #36).
+        if (teasers.Count == 0 || anyStructural)
             throw new InvalidOperationException(summary);
 
-        _logger.LogInformation("{Summary}", summary);
-        return rows;
+        throw new SourceEmptyException(summary);
     }
 
     private record Teaser(string Title, string Summary, string Url);
+
+    // How one teaser's detail page resolved. Rows = produced occurrences;
+    // BenignEmpty = parsed fine but nothing matched (age-filtered, no upcoming
+    // dates, or all out of horizon); Structural = a page we couldn't parse
+    // (missing occurrence container, or labels/times we failed to read), which
+    // signals a likely format change rather than a genuinely empty event.
+    private enum TeaserOutcome { Rows, BenignEmpty, Structural }
 
     private static IEnumerable<Teaser> ExtractTeasers(IDocument hub)
     {
@@ -149,14 +173,14 @@ public sealed class BritishMuseumScraper : IScraper
 
     // Builds the rows for one event's detail page, plus a short note describing
     // what was seen — so a 0-row outcome explains itself in the run diagnostics.
-    private (List<EventOccurrence> Rows, string Note) BuildOccurrences(
+    private (List<EventOccurrence> Rows, string Note, TeaserOutcome Outcome) BuildOccurrences(
         IDocument detail, Teaser teaser, DateOnly from, DateOnly to, DateTimeOffset now)
     {
         var rows = new List<EventOccurrence>();
 
         var container = detail.QuerySelector("[data-js-event-occurrences]");
         if (container is null)
-            return (rows, "no [data-js-event-occurrences] container");
+            return (rows, "no [data-js-event-occurrences] container", TeaserOutcome.Structural);
 
         var vid = container.GetAttribute("data-vid") ?? Slug(teaser.Url);
 
@@ -172,7 +196,7 @@ public sealed class BritishMuseumScraper : IScraper
             (minAge, maxAge) = TextParsing.ParseAgeRange(teaser.Summary);
 
         if (minAge is int min && min >= UnderFiveCutoffMonths)
-            return (rows, $"age-filtered ({min}mo+, school-age)");
+            return (rows, $"age-filtered ({min}mo+, school-age)", TeaserOutcome.BenignEmpty);
 
         // The accordion is a flat sequence of: <h3 .accordion__heading><button><span>May 2026</span>…
         // followed by <div .accordion__content> containing <dl .occurrence-list>. Months can repeat
@@ -232,7 +256,18 @@ public sealed class BritishMuseumScraper : IScraper
             + (dayUnparsed > 0 ? $"; {dayUnparsed} day unparsed" : "")
             + (outOfHorizon > 0 ? $"; {outOfHorizon} out-of-horizon" : "")
             + (noTime > 0 ? $"; {noTime} with no parseable time" : "");
-        return (rows, note);
+
+        // Rows -> good. Labels/times we couldn't parse -> a likely format change
+        // (Structural). Otherwise the event simply has no dates in our window
+        // (no accordion items, or everything out of horizon) -> BenignEmpty.
+        TeaserOutcome outcome;
+        if (rows.Count > 0)
+            outcome = TeaserOutcome.Rows;
+        else if (monthUnparsed > 0 || dayUnparsed > 0 || noTime > 0)
+            outcome = TeaserOutcome.Structural;
+        else
+            outcome = TeaserOutcome.BenignEmpty;
+        return (rows, note, outcome);
     }
 
     // Walks every "Ages …" phrase in the page text and returns the most
