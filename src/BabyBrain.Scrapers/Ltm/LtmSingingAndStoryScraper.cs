@@ -118,10 +118,14 @@ public sealed class LtmSingingAndStoryScraper : IScraper
     }
 
     // "When: 10:30, 11:30, 13:20, 14:20" — grab the comma-separated run after
-    // the "When:" label, then parse each HH:MM out of it.
+    // the "When:" label, then parse each HH:MM out of it. LTM have also been
+    // seen using "Session times:" / "Times:" for the same field, so accept
+    // any of those labels.
     private static IReadOnlyList<TimeOnly> ParseSessionTimes(string text)
     {
-        var m = Regex.Match(text, @"When:\s*((?:\d{1,2}:\d{2}\s*,?\s*)+)", RegexOptions.IgnoreCase);
+        var m = Regex.Match(text,
+            @"(?:When|Session times|Times)\s*:\s*((?:\d{1,2}:\d{2}\s*,?\s*)+)",
+            RegexOptions.IgnoreCase);
         if (!m.Success) return Array.Empty<TimeOnly>();
 
         var times = new List<TimeOnly>();
